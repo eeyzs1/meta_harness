@@ -95,3 +95,20 @@ If the user says "connect to database" — ask: "Which database? What ORM? Conne
 If the user says "make it fast" — ask: "What metric? What threshold? Measured how?"
 
 **NEVER assume. ALWAYS clarify ambiguous integration points.**
+
+### 6. Handoff to Planner Pipeline
+
+Once acceptance criteria are confirmed, the interpreter hands off to the **Planner Engine** (see `seeds/planning/planner-engine.md`) for full planning pipeline execution:
+
+| Stage | Name | Key Activities |
+|-------|------|---------------|
+| Stage 0 | Environment Detection | Read project.yaml, detect tools, preload memory, claim run namespace |
+| Stage 1 | Requirement Clarification | Greenfield checklist or brownfield 0-2 questions |
+| Stage 2 | Reconnaissance | Parallel: detect-stack + summarize-repo (brownfield) or detect-env (greenfield) |
+| Stage 3 | Deep Think | Risks, dependencies, research, write THINKING.md |
+| Stage 4 | Adaptive Decomposition | Derive phase count, declare Phase DAG, map skills to phases |
+| Stage 5 | Write Phase Specs | Write ROADMAP.md, STATE.md, phase-N/spec.md files |
+| Stage 6 | Plan Review | Self-critique, present to user with revision menu, pre-flight check |
+| Stage 7 | Handoff | Capture baseline ref, replace `{{RUN_ROOT}}`, output dispatch command |
+
+The interpreter's output (structured task + acceptance criteria) feeds directly into Stage 1 (Requirement Clarification) as pre-analyzed context.
