@@ -1,0 +1,130 @@
+# verify.ps1 — Windows PowerShell meta-harness 安装健康检查
+# 用法：powershell meta-harness/scripts/verify.ps1
+
+param()
+$ErrorActionPreference = "Continue"
+
+Write-Host "=== Meta-Harness Health Check ===" -ForegroundColor Cyan
+Write-Host ""
+
+$Pass = 0; $Fail = 0; $Warn = 0
+
+function Check {
+    param($Desc, $Result)
+    switch ($Result) {
+        "pass" { Write-Host "  ✓ $Desc" -ForegroundColor Green; $script:Pass++ }
+        "warn" { Write-Host "  ⚠ $Desc" -ForegroundColor Yellow; $script:Warn++ }
+        "fail" { Write-Host "  ✗ $Desc" -ForegroundColor Red; $script:Fail++ }
+    }
+}
+
+# 1. Submodule
+if ((Test-Path "meta-harness") -and (Test-Path "meta-harness/VERSION")) {
+    Check "Submodule meta-harness/ exists with VERSION" "pass"
+} else {
+    Check "Submodule meta-harness/ exists with VERSION" "fail"
+}
+
+# 2. .gitmodules
+if ((Test-Path ".gitmodules") -and ((Get-Content ".gitmodules" -Raw) -match "meta-harness")) {
+    Check ".gitmodules references meta-harness" "pass"
+} else {
+    Check ".gitmodules references meta-harness" "fail"
+}
+
+# 3. VERSION
+if (Test-Path "meta-harness/VERSION") {
+    $ver = (Get-Content "meta-harness/VERSION").Trim()
+    Check "VERSION file readable: $ver" "pass"
+} else {
+    Check "VERSION file readable" "fail"
+}
+
+# 4. project.yaml
+if (Test-Path ".meta-harness/project.yaml") {
+    Check ".meta-harness/project.yaml exists" "pass"
+} else {
+    Check ".meta-harness/project.yaml exists" "fail"
+}
+
+# 5. project.yaml content
+if (Test-Path ".meta-harness/project.yaml") {
+    $content = Get-Content ".meta-harness/project.yaml" -Raw
+    if ($content -match "project:") {
+        Check "project.yaml has 'project:' key" "pass"
+    } else {
+        Check "project.yaml has 'project:' key" "fail"
+    }
+}
+
+# 6. AGENTS.md
+if (Test-Path "AGENTS.md") {
+    $content = Get-Content "AGENTS.md" -Raw
+    if ($content -match "meta-harness/") {
+        Check "AGENTS.md references meta-harness/ submodule" "pass"
+    } else {
+        Check "AGENTS.md references meta-harness/ submodule" "warn"
+    }
+} else {
+    Check "AGENTS.md exists" "fail"
+}
+
+# 7. Key scripts
+$Scripts = @(
+    "meta-harness/scripts/check-version.ps1",
+    "meta-harness/scripts/update-harness.ps1",
+    "meta-harness/scripts/migrate.ps1",
+    "meta-harness/scripts/init-harness-submodule.ps1"
+)
+foreach ($s in $Scripts) {
+    if (Test-Path $s) { Check "Script exists: $s" "pass" }
+    else { Check "Script exists: $s" "fail" }
+}
+
+# 8. Key meta files
+$MetaFiles = @(
+    "meta-harness/meta/interpreter.md",
+    "meta-harness/meta/harness-generator.md",
+    "meta-harness/meta/phase-loader.md",
+    "meta-harness/meta/agent-factory.md"
+)
+foreach ($f in $MetaFiles) {
+    if (Test-Path $f) { Check "Meta file exists: $f" "pass" }
+    else { Check "Meta file exists: $f" "fail" }
+}
+
+# 9. Rule files
+$Rules = @(
+    "meta-harness/meta/rules/anti-mock.md",
+    "meta-harness/meta/rules/anti-simplification.md",
+    "meta-harness/meta/rules/heuristic-traps.md",
+    "meta-harness/meta/rules/tool-discovery.md",
+    "meta-harness/meta/rules/absolute-rules.md"
+)
+foreach ($r in $Rules) {
+    if (Test-Path $r) { Check "Rule exists: $r" "pass" }
+    else { Check "Rule exists: $r" "fail" }
+}
+
+# 10. Directories
+if (Test-Path ".meta-harness/runs") { Check ".meta-harness/runs/ directory exists" "pass" }
+else { Check ".meta-harness/runs/ directory exists" "warn" }
+
+if (Test-Path ".meta-harness/memory") { Check ".meta-harness/memory/ directory exists" "pass" }
+else { Check ".meta-harness/memory/ directory exists" "warn" }
+
+Write-Host ""
+Write-Host "=== Results ===" -ForegroundColor Cyan
+Write-Host "  Pass: $Pass" -ForegroundColor Green
+Write-Host "  Warn: $Warn" -ForegroundColor Yellow
+Write-Host "  Fail: $Fail" -ForegroundColor Red
+
+if ($Fail -gt 0) {
+    Write-Host ""
+    Write-Host "Health check failed. See above for details." -ForegroundColor Red
+    exit 1
+} else {
+    Write-Host ""
+    Write-Host "Health check passed." -ForegroundColor Green
+    exit 0
+}

@@ -133,3 +133,46 @@ git commit -m "Pin meta-harness to v2.1.0"
 ```
 
 推荐：在稳定版本上用 tag 锁定。需要新特性时手动升级，而不是自动拉最新。
+
+---
+
+## CI/CD 中使用
+
+在 CI 环境中，meta-harness 的 agent 不会自动更新（避免 CI 中产生意外变更）。需要手动处理：
+
+```yaml
+# GitHub Actions 示例
+jobs:
+  build:
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+      
+      - name: Lock meta-harness version
+        run: |
+          cd meta-harness
+          git fetch --tags
+          git checkout v2.0.0   # 锁定稳定版本
+      
+      - name: Health check
+        run: bash meta-harness/scripts/verify.sh
+```
+
+**CI 环境中的关键原则：**
+- 使用 `submodules: 'recursive'` 检出时自动拉取 submodule
+- 锁定 tag 版本，不使用自动更新
+- 在 CI 开始前运行 `verify.sh` 检查框架完整性
+- 如果使用 `--mode fast`，跳过 code-review 和 brainstorming 阶段
+
+---
+
+## 快捷命令速查
+
+| 场景 | Linux/Mac | Windows |
+|------|-----------|---------|
+| 泛化更新入口 | `bash <(curl -sSL .../bootstrap-update.sh)` | `powershell ... bootstrap-update.ps1 \| iex` |
+| 新项目安装 | `bash <(curl -sSL .../install.sh)` | `powershell ... install.ps1 \| iex` |
+| 更新框架 | `bash meta-harness/scripts/update-harness.sh` | `powershell meta-harness/scripts/update-harness.ps1` |
+| 健康检查 | `bash meta-harness/scripts/verify.sh` | `powershell meta-harness/scripts/verify.ps1` |
+| 移除框架 | `bash meta-harness/scripts/uninstall.sh` | `powershell meta-harness/scripts/uninstall.ps1` |
