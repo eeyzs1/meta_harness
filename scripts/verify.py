@@ -4,6 +4,18 @@ Post-task verification: lint, type check, test, build, and secret scanning.
 
 Cross-platform replacement for verify.sh — works on Windows, macOS, and Linux.
 
+Verification Spec (WHAT to verify, not HOW):
+  Pre-Task:
+    - Task card completeness (Acceptance Criteria, Scope, Verification Method sections)
+    - Clean working tree (git status --porcelain)
+    - No unresolved BLOCKER in memory/meta-mistakes.md
+  Post-Change:
+    - Lint (ESLint for Node.js, Ruff for Python)
+    - Type check (tsc for TypeScript, mypy for Python)
+    - Tests (npm test / pytest)
+    - Build (npm run build)
+    - Secret scan (password, api_key, secret, token, PRIVATE KEY patterns)
+
 Usage:
     python scripts/verify.py [--project-root <dir>]
 """

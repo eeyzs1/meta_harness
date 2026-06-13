@@ -315,7 +315,7 @@ The system uses a **three-layer verification approach**:
 
 | Layer | File | Purpose |
 |---|---|---|
-| Declarative | `scripts/verify-spec.md` | Defines **WHAT to check** (platform-agnostic) |
+| Declarative | `scripts/verify.py` (docstring) | Defines **WHAT to check** (platform-agnostic) |
 | Executable | `scripts/verify.py` | Implements **HOW to check** (cross-platform Python) |
 | Completeness | `scripts/verify-generation.py` | Verifies generated projects have all 7+2 layers |
 

@@ -114,10 +114,6 @@ done
 
 # 9. 规则文件存在
 RULES=(
-    "meta-harness/meta/rules/anti-mock.md"
-    "meta-harness/meta/rules/anti-simplification.md"
-    "meta-harness/meta/rules/heuristic-traps.md"
-    "meta-harness/meta/rules/tool-discovery.md"
     "meta-harness/meta/rules/absolute-rules.md"
 )
 for r in "${RULES[@]}"; do

@@ -11,14 +11,15 @@
 1. 所有启动时：加载 `meta/phase-loader.md`（本文件）→ 确定当前 Phase
 2. 每个 Phase 开始时：加载该 Phase 的强制文件列表
 3. Phase 内按需：跨 Phase 技能（如 `dispatching-parallel-agents`）仅在触发时加载
-4. 规则文件：仅在违反风险出现时加载（如检测到 mock 模式 → 加载 `meta/rules/anti-mock.md`）
+4. 规则文件：仅在违反风险出现时加载（如检测到 mock 模式 → 加载 `meta/rules/absolute-rules.md` 附录 A）
 
 ## Phase → 文件映射
 
 ### INTERPRET Phase
 ```
 强制: meta/interpreter.md
-按需: meta/rules/heuristic-traps.md（怀疑上下文漂移时）
+     seeds/planning/planner-engine.md
+按需: meta/rules/absolute-rules.md（附录 D — 怀疑上下文漂移时）
 ```
 
 ### GENERATE Phase
@@ -28,7 +29,7 @@
      seeds/planning/planner-engine.md
 按需: seeds/tools/adapters/（仅选择的 adapter 类型）
      seeds/skills/（仅被任务引用的技能）
-     meta/rules/anti-simplification.md（生成代码时）
+     meta/rules/absolute-rules.md（附录 B — 生成代码时）
 ```
 
 ### FACTORY Phase
@@ -45,7 +46,7 @@
      seeds/verification/quality-gate.py
 按需: seeds/skills/verification.md
      seeds/skills/systematic-debugging.md（仅验证失败时）
-     meta/rules/anti-mock.md（扫描到 mock 模式时）
+     meta/rules/absolute-rules.md（附录 A — 扫描到 mock 模式时）
 ```
 
 ### JUDGE Phase
@@ -65,13 +66,15 @@
 
 ## 规则文件（按需加载）
 
-| 规则文件 | 触发条件 |
-|----------|----------|
-| `meta/rules/anti-mock.md` | 检测到 mock/fake/stub 模式 |
-| `meta/rules/anti-simplification.md` | 代码生成阶段 |
-| `meta/rules/tool-discovery.md` | 引入新依赖时 |
-| `meta/rules/heuristic-traps.md` | 自我检查（怀疑踩坑时） |
-| `meta/rules/absolute-rules.md` | 任何规则冲突或不确定时 |
+所有规则已统一到 `meta/rules/absolute-rules.md`。按需加载对应附录：
+
+| 触发条件 | 加载 |
+|----------|------|
+| 检测到 mock/fake/stub 模式 | `meta/rules/absolute-rules.md` 附录 A |
+| 代码生成阶段 | `meta/rules/absolute-rules.md` 附录 B |
+| 引入新依赖时 | `meta/rules/absolute-rules.md` 附录 C |
+| 自我检查（怀疑踩坑时） | `meta/rules/absolute-rules.md` 附录 D |
+| 任何规则冲突或不确定时 | `meta/rules/absolute-rules.md` 全文 |
 
 ## 运行模式
 

@@ -95,10 +95,6 @@ foreach ($f in $MetaFiles) {
 
 # 9. Rule files
 $Rules = @(
-    "meta-harness/meta/rules/anti-mock.md",
-    "meta-harness/meta/rules/anti-simplification.md",
-    "meta-harness/meta/rules/heuristic-traps.md",
-    "meta-harness/meta/rules/tool-discovery.md",
     "meta-harness/meta/rules/absolute-rules.md"
 )
 foreach ($r in $Rules) {

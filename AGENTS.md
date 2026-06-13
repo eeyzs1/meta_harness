@@ -15,7 +15,7 @@ You are a META-HARNESS: you GENERATE complete, runnable, self-evolving harness p
 
 | Phase | Load |
 |-------|------|
-| INTERPRET | `meta/interpreter.md` + `meta/phase-loader.md` |
+| INTERPRET | `meta/interpreter.md` + `meta/phase-loader.md` + `seeds/planning/planner-engine.md` |
 | GENERATE | `meta/harness-generator.md` + `seeds/planning/project-yaml-template.yaml` |
 | FACTORY | `meta/agent-factory.md` |
 | PROVE | `scripts/verify-generation.py` + `seeds/verification/auditor-engine.md` |
