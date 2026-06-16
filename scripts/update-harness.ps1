@@ -10,6 +10,66 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $MHRoot = Split-Path -Parent $ScriptDir
 $ProjectRoot = Split-Path -Parent $MHRoot
 
+# === 协议回退：当前 remote pull 失败时，自动切到另一种协议重试 ===
+$MH_REPO_SSH = "git@github.com:eeyzs1/meta_harness.git"
+$MH_REPO_HTTPS = "https://github.com/eeyzs1/meta_harness.git"
+
+function Invoke-PullWithFallback {
+    param([string]$RepoDir)
+
+    Push-Location $RepoDir
+    try {
+        $current = git config --get remote.origin.url 2>$null
+    } finally {
+        Pop-Location
+    }
+
+    if (-not $current) {
+        $alternate = $MH_REPO_SSH
+    } elseif ($current -match "^git@github.com:") {
+        $alternate = $MH_REPO_HTTPS
+    } else {
+        $alternate = $MH_REPO_SSH
+    }
+
+    # 第一次尝试：沿用已配置的 remote
+    Push-Location $RepoDir
+    try {
+        $output = git pull origin main 2>&1
+        if ($LASTEXITCODE -eq 0) { return }
+    } finally {
+        Pop-Location
+    }
+
+    Write-Host ""
+    Write-Host "  Pull from current remote ($current) failed."
+    Write-Host "  Retrying with alternate protocol: $alternate"
+
+    Push-Location $RepoDir
+    try {
+        if ($current) {
+            git remote set-url origin $alternate | Out-Null
+        } else {
+            git remote add origin $alternate | Out-Null
+        }
+        $output = git pull origin main 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  ERROR: Both SSH and HTTPS failed for meta-harness repo." -ForegroundColor Red
+            Write-Host "  Check network/credentials, then restore the original remote if needed:" -ForegroundColor Red
+            if ($current) {
+                Write-Host "    git -C `"$RepoDir`" remote set-url origin $current" -ForegroundColor Red
+            }
+            throw "Pull failed for both protocols"
+        }
+    } finally {
+        # 拉成功：把 remote 改回原值（保留用户原来的协议偏好）
+        if ($current) {
+            git remote set-url origin $current | Out-Null
+        }
+        Pop-Location
+    }
+}
+
 Write-Host "=== Meta-Harness Update ==="
 Write-Host ""
 
@@ -35,12 +95,7 @@ Write-Host "Current version: $CurrentVersion"
 # Step 3: Git pull
 Write-Host ""
 Write-Host "--- Pulling latest framework ---"
-Push-Location $MHRoot
-try {
-    git pull origin main
-} finally {
-    Pop-Location
-}
+Invoke-PullWithFallback -RepoDir $MHRoot
 
 $NewVersion = if (Test-Path $VersionFile) { (Get-Content $VersionFile).Trim() } else { "unknown" }
 Write-Host "Updated to: $NewVersion"

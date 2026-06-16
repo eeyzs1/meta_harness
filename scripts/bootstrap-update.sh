@@ -21,6 +21,52 @@ YELLOW="\033[33m"
 RED="\033[31m"
 RESET="\033[0m"
 
+# === 共享：探测可用的 git 协议 ===
+MH_REPO_SSH="git@github.com:eeyzs1/meta_harness.git"
+MH_REPO_HTTPS="https://github.com/eeyzs1/meta_harness.git"
+
+detect_mh_repo_url() {
+    local override="${1:-}"
+    if [ -n "$override" ]; then
+        echo "$override"
+        return 0
+    fi
+    if [ -n "${MH_REPO_URL:-}" ]; then
+        echo "$MH_REPO_URL"
+        return 0
+    fi
+
+    local probe
+    if command -v timeout >/dev/null 2>&1; then
+        probe() { timeout 5 git ls-remote --heads "$1" >/dev/null 2>&1; }
+    else
+        # macOS / 其它无 timeout 的平台：靠 sleep + kill 兜底
+        probe() {
+            git ls-remote --heads "$1" >/dev/null 2>&1 &
+            local pid=$!
+            ( sleep 5; kill -0 "$pid" 2>/dev/null && kill "$pid" 2>/dev/null ) &
+            local watchdog=$!
+            wait "$pid" 2>/dev/null
+            local rc=$?
+            kill -0 "$watchdog" 2>/dev/null && kill "$watchdog" 2>/dev/null
+            wait "$watchdog" 2>/dev/null
+            return $rc
+        }
+    fi
+
+    if probe "$MH_REPO_SSH"; then
+        echo -e "  ${GREEN}✓ SSH reachable${RESET}" >&2
+        echo "$MH_REPO_SSH"
+    elif probe "$MH_REPO_HTTPS"; then
+        echo -e "  ${YELLOW}⚠ SSH unreachable — falling back to HTTPS${RESET}" >&2
+        echo "$MH_REPO_HTTPS"
+    else
+        echo -e "  ${RED}ERROR: Cannot reach GitHub via SSH or HTTPS.${RESET}" >&2
+        echo "  Check your network and SSH key configuration, then retry." >&2
+        return 1
+    fi
+}
+
 echo -e "${BOLD}=== Meta-Harness Bootstrap ===${RESET}"
 echo ""
 
@@ -135,13 +181,13 @@ case "$TYPE" in
         echo ""
         echo "To install meta-harness in this project:"
         echo ""
-        echo "  1. Add as submodule:"
-        echo "     git submodule add git@github.com:eeyzs1/meta_harness.git meta-harness"
+        echo "  1. Add as submodule (auto-detects SSH vs HTTPS):"
+        echo "     git submodule add <ssh-or-https-url> meta-harness"
         echo ""
         echo "  2. Run init script:"
         echo "     bash meta-harness/scripts/init-harness-submodule.sh"
         echo ""
-        echo "Or use the one-liner:"
+        echo "Or use the one-liner (auto-detects protocol):"
         echo "  bash <(curl -sSL https://raw.githubusercontent.com/eeyzs1/meta_harness/main/scripts/install.sh)"
         echo ""
         read -p "Install now? [y/N] " -r CONFIRM
@@ -150,9 +196,12 @@ case "$TYPE" in
             exit 0
         fi
         echo ""
+
+        MH_REPO_URL=$(detect_mh_repo_url) || exit 1
+        echo ""
         
         echo "Adding submodule..."
-        git submodule add git@github.com:eeyzs1/meta_harness.git meta-harness
+        git submodule add "$MH_REPO_URL" meta-harness
         echo ""
         
         echo "Initializing..."

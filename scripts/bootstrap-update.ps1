@@ -16,6 +16,48 @@ function Out-Green { Write-Host $args[0] -ForegroundColor Green }
 function Out-Yellow { Write-Host $args[0] -ForegroundColor Yellow }
 function Out-Red { Write-Host $args[0] -ForegroundColor Red }
 
+# === 共享：探测可用的 git 协议 ===
+$MH_REPO_SSH = "git@github.com:eeyzs1/meta_harness.git"
+$MH_REPO_HTTPS = "https://github.com/eeyzs1/meta_harness.git"
+
+function Test-GitRemote {
+    param([string]$Url)
+    $job = Start-Job -ScriptBlock {
+        param($u)
+        $output = git ls-remote --heads $u 2>&1
+        return $LASTEXITCODE
+    } -ArgumentList $Url
+
+    $completed = Wait-Job $job -Timeout 5
+    if ($completed) {
+        $code = Receive-Job $job
+        Remove-Job $job -Force
+        return ($code -eq 0)
+    } else {
+        Stop-Job $job
+        Remove-Job $job -Force
+        return $false
+    }
+}
+
+function Get-MhRepoUrl {
+    param([string]$Override)
+    if ($Override) { return $Override }
+    if ($env:MH_REPO_URL) { return $env:MH_REPO_URL }
+
+    if (Test-GitRemote -Url $MH_REPO_SSH) {
+        Write-Host "  ✓ SSH reachable" -ForegroundColor Green
+        return $MH_REPO_SSH
+    } elseif (Test-GitRemote -Url $MH_REPO_HTTPS) {
+        Write-Host "  ⚠ SSH unreachable — falling back to HTTPS" -ForegroundColor Yellow
+        return $MH_REPO_HTTPS
+    } else {
+        Write-Host "  ERROR: Cannot reach GitHub via SSH or HTTPS." -ForegroundColor Red
+        Write-Host "  Check your network and SSH key configuration, then retry."
+        return $null
+    }
+}
+
 Write-Banner
 
 # === 检测状态 ===
@@ -96,21 +138,25 @@ switch ($Type) {
         Write-Host ""
         Write-Host "To install meta-harness in this project:"
         Write-Host ""
-        Write-Host "  1. Add as submodule:"
-        Write-Host "     git submodule add git@github.com:eeyzs1/meta_harness.git meta-harness"
+        Write-Host "  1. Add as submodule (auto-detects SSH vs HTTPS):"
+        Write-Host "     git submodule add <ssh-or-https-url> meta-harness"
         Write-Host ""
         Write-Host "  2. Run init script:"
         Write-Host "     powershell meta-harness/scripts/init-harness-submodule.ps1"
         Write-Host ""
-        Write-Host "Or use the one-liner:"
+        Write-Host "Or use the one-liner (auto-detects protocol):"
         Write-Host "  powershell -ExecutionPolicy Bypass -Command `"iwr <url>/install.ps1 | iex`""
         Write-Host ""
         $Confirm = Read-Host "Install now? [y/N]"
         if ($Confirm -ne "y" -and $Confirm -ne "Y") { Write-Host "Aborted."; exit 0 }
         Write-Host ""
+
+        $MH_REPO_URL = Get-MhRepoUrl
+        if (-not $MH_REPO_URL) { exit 1 }
+        Write-Host ""
         
         Write-Host "Adding submodule..."
-        git submodule add git@github.com:eeyzs1/meta_harness.git meta-harness
+        git submodule add $MH_REPO_URL meta-harness
         Write-Host ""
         
         Write-Host "Initializing..."

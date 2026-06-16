@@ -9,6 +9,58 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MH_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PROJECT_ROOT="$(cd "$MH_ROOT/.." && pwd)"
 
+# === 协议回退：当前 remote pull 失败时，自动切到另一种协议重试 ===
+MH_REPO_SSH="git@github.com:eeyzs1/meta_harness.git"
+MH_REPO_HTTPS="https://github.com/eeyzs1/meta_harness.git"
+
+pull_with_fallback() {
+    local repo_dir="$1"
+    local current remote alternate
+    current=$(git -C "$repo_dir" config --get remote.origin.url 2>/dev/null || echo "")
+    remote="$current"
+
+    if [ -n "$current" ]; then
+        if echo "$current" | grep -q "^git@github.com:"; then
+            alternate="$MH_REPO_HTTPS"
+        else
+            alternate="$MH_REPO_SSH"
+        fi
+    else
+        alternate="$MH_REPO_SSH"
+    fi
+
+    # 第一次尝试：沿用已配置的 remote
+    if git -C "$repo_dir" pull origin main; then
+        return 0
+    fi
+
+    echo ""
+    echo "  Pull from current remote ($remote) failed."
+    echo "  Retrying with alternate protocol: $alternate"
+
+    # 第二次尝试：临时把 remote 切到 alternate
+    if [ -n "$current" ]; then
+        git -C "$repo_dir" remote set-url origin "$alternate"
+    else
+        git -C "$repo_dir" remote add origin "$alternate"
+    fi
+
+    if ! git -C "$repo_dir" pull origin main; then
+        echo "  ERROR: Both SSH and HTTPS failed for meta-harness repo." >&2
+        echo "  Check network/credentials, then restore the original remote if needed:" >&2
+        if [ -n "$current" ]; then
+            echo "    git -C \"$repo_dir\" remote set-url origin $current" >&2
+        fi
+        return 1
+    fi
+
+    # 拉成功：把 remote 改回原值（保留用户原来的协议偏好）
+    if [ -n "$current" ]; then
+        git -C "$repo_dir" remote set-url origin "$current"
+    fi
+    return 0
+}
+
 echo "=== Meta-Harness Update ==="
 echo ""
 
@@ -31,9 +83,7 @@ echo "Current version: $CURRENT_VERSION"
 # Step 3: Git pull
 echo ""
 echo "--- Pulling latest framework ---"
-cd "$MH_ROOT"
-git pull origin main
-cd "$PROJECT_ROOT"
+pull_with_fallback "$MH_ROOT"
 
 NEW_VERSION=$(cat "$MH_ROOT/VERSION" 2>/dev/null | tr -d ' \n\r')
 echo "Updated to: $NEW_VERSION"

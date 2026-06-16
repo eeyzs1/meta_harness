@@ -59,10 +59,51 @@ if [ -d "meta-harness" ]; then
     rm -rf meta-harness
 fi
 
+# === 探测可用的 git 协议 ===
+# 默认优先 SSH（推送/认证更顺），但允许通过环境变量或参数覆盖。
+# 探测策略：用 timeout 限制的 git ls-remote 验证远端可达。
+MH_REPO_SSH="git@github.com:eeyzs1/meta_harness.git"
+MH_REPO_HTTPS="https://github.com/eeyzs1/meta_harness.git"
+MH_REPO_URL="${MH_REPO_URL:-${1:-}}"
+
+if [ -z "$MH_REPO_URL" ]; then
+    echo -e "${BOLD}Detecting git protocol...${RESET}"
+    if command -v timeout >/dev/null 2>&1; then
+        PROBE_TIMEOUT() { timeout 5 git ls-remote --heads "$1" >/dev/null 2>&1; }
+    else
+        # macOS 默认无 timeout 命令，用 (sleep + kill) 兜底
+        PROBE_TIMEOUT() {
+            git ls-remote --heads "$1" >/dev/null 2>&1 &
+            local pid=$!
+            ( sleep 5; kill -0 "$pid" 2>/dev/null && kill "$pid" 2>/dev/null ) &
+            local watchdog=$!
+            wait "$pid" 2>/dev/null
+            local rc=$?
+            kill -0 "$watchdog" 2>/dev/null && kill "$watchdog" 2>/dev/null
+            wait "$watchdog" 2>/dev/null
+            return $rc
+        }
+    fi
+
+    if PROBE_TIMEOUT "$MH_REPO_SSH"; then
+        MH_REPO_URL="$MH_REPO_SSH"
+        echo -e "  ${GREEN}✓ SSH reachable — using $MH_REPO_URL${RESET}"
+    elif PROBE_TIMEOUT "$MH_REPO_HTTPS"; then
+        MH_REPO_URL="$MH_REPO_HTTPS"
+        echo -e "  ${YELLOW}⚠ SSH unreachable — falling back to $MH_REPO_URL${RESET}"
+    else
+        echo -e "  ${RED}ERROR: Cannot reach GitHub via SSH or HTTPS.${RESET}"
+        echo "  Check your network and SSH key configuration, then retry."
+        echo "  You can also pass a URL explicitly: $0 <git-url>"
+        exit 1
+    fi
+    echo ""
+fi
+
 # === 安装 ===
 
 echo -e "${GREEN}Adding meta-harness as submodule...${RESET}"
-git submodule add git@github.com:eeyzs1/meta_harness.git meta-harness
+git submodule add "$MH_REPO_URL" meta-harness
 echo ""
 
 echo -e "${GREEN}Initializing project structure...${RESET}"

@@ -1,6 +1,7 @@
 # install.ps1 — Windows PowerShell 安装 meta-harness
 # 用法：powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/eeyzs1/meta_harness/main/scripts/install.ps1 | iex"
-#      或：在已有 submodule 的项目中：powershell meta-harness/scripts/install.ps1
+#      或：在已有 submodule 的项目中：powershell meta-harness/scripts/install.ps1 [repo-url]
+# 可选参数：$args[0] 显式指定要 add 的仓库 URL（覆盖自动探测）
 
 param()
 $ErrorActionPreference = "Stop"
@@ -54,10 +55,56 @@ if (Test-Path "meta-harness") {
     Remove-Item -Recurse -Force meta-harness
 }
 
+# === 探测可用的 git 协议 ===
+# 默认优先 SSH（推送/认证更顺），允许通过 $env:MH_REPO_URL 或第一个参数覆盖。
+# 探测策略：在 Job 里跑带超时的 git ls-remote，避免 SSH 弹密码卡住终端。
+$MH_REPO_SSH = "git@github.com:eeyzs1/meta_harness.git"
+$MH_REPO_HTTPS = "https://github.com/eeyzs1/meta_harness.git"
+$MH_REPO_URL = $env:MH_REPO_URL
+if (-not $MH_REPO_URL -and $args.Count -gt 0) { $MH_REPO_URL = $args[0] }
+
+if (-not $MH_REPO_URL) {
+    Write-Host "Detecting git protocol..." -ForegroundColor Cyan
+
+    function Test-GitRemote {
+        param([string]$Url)
+        $job = Start-Job -ScriptBlock {
+            param($u)
+            $output = git ls-remote --heads $u 2>&1
+            return $LASTEXITCODE
+        } -ArgumentList $Url
+
+        $completed = Wait-Job $job -Timeout 5
+        if ($completed) {
+            $code = Receive-Job $job
+            Remove-Job $job -Force
+            return ($code -eq 0)
+        } else {
+            Stop-Job $job
+            Remove-Job $job -Force
+            return $false
+        }
+    }
+
+    if (Test-GitRemote -Url $MH_REPO_SSH) {
+        $MH_REPO_URL = $MH_REPO_SSH
+        Write-Host "  ✓ SSH reachable — using $MH_REPO_URL" -ForegroundColor Green
+    } elseif (Test-GitRemote -Url $MH_REPO_HTTPS) {
+        $MH_REPO_URL = $MH_REPO_HTTPS
+        Write-Host "  ⚠ SSH unreachable — falling back to $MH_REPO_URL" -ForegroundColor Yellow
+    } else {
+        Write-Host "  ERROR: Cannot reach GitHub via SSH or HTTPS." -ForegroundColor Red
+        Write-Host "  Check your network and SSH key configuration, then retry."
+        Write-Host "  You can also pass a URL explicitly: install.ps1 <git-url>"
+        exit 1
+    }
+    Write-Host ""
+}
+
 # === 安装 ===
 
 Write-Host "Adding meta-harness as submodule..." -ForegroundColor Green
-git submodule add git@github.com:eeyzs1/meta_harness.git meta-harness
+git submodule add $MH_REPO_URL meta-harness
 Write-Host ""
 
 Write-Host "Initializing project structure..." -ForegroundColor Green

@@ -52,11 +52,30 @@ powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.c
 
 ## 新项目初始化
 
+**自动检测 SSH / HTTPS（推荐）**
+
+```bash
+# Linux/Mac — 脚本会自动选 SSH 或 HTTPS
+bash <(curl -sSL https://raw.githubusercontent.com/eeyzs1/meta_harness/main/scripts/install.sh)
+
+# Windows — 脚本会自动选 SSH 或 HTTPS
+powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/eeyzs1/meta_harness/main/scripts/install.ps1 | iex"
+```
+
+`install` / `bootstrap-update` 会按以下顺序探测并选用第一个可达的协议：
+1. SSH (`git@github.com:eeyzs1/meta_harness.git`) — 5 秒超时
+2. HTTPS (`https://github.com/eeyzs1/meta_harness.git`) — 5 秒超时
+3. 显式 URL 覆盖：`MH_REPO_URL` 环境变量，或 `bash install.sh <url>`
+
+**手动指定协议**
+
 ```bash
 # 1. 进入你的项目根目录
 cd ~/my-project
 
-# 2. 添加 meta-harness 为 submodule
+# 2. 显式添加 meta-harness 为 submodule（强制 HTTPS）
+git submodule add https://github.com/eeyzs1/meta_harness.git meta-harness
+# 或强制 SSH
 git submodule add git@github.com:eeyzs1/meta_harness.git meta-harness
 
 # 3. 运行初始化脚本
@@ -88,6 +107,8 @@ bash meta-harness/scripts/update-harness.sh
 # Windows
 powershell meta-harness/scripts/update-harness.ps1
 ```
+
+`update-harness` 内部使用 `pull_with_fallback` / `Invoke-PullWithFallback`：先沿用已配置的 remote 拉取，失败则临时切到另一种协议重试；成功后会还原原来的 remote URL，保留用户的协议偏好。
 
 Agent 会在每次启动时自动检测并执行更新（见 AGENTS.md 第 1 步）。
 
