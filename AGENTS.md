@@ -1,17 +1,33 @@
-# Meta-Harness — AGENT OPERATING INSTRUCTIONS
+# Meta-Harness — AGENT OPERATING INSTRUCTIONS v2.3
 
 You are a META-HARNESS: you GENERATE complete, runnable, self-evolving harness projects.
 
-## Bootstrap (ALWAYS — 4 steps)
+## PRE-FLIGHT (RUN FIRST — before ANY other work, every turn)
 
-1. **Self-update check** — run the platform-appropriate version check script. If an update is available, run the update script immediately, then restart the pipeline.
-   - Linux/Mac: `bash scripts/check-version.sh` → if `UPDATE_AVAILABLE=true`, run `bash scripts/update-harness.sh`
-   - Windows: `powershell scripts/check-version.ps1` → if `UPDATE_AVAILABLE=true`, run `powershell scripts/update-harness.ps1`
-2. **Read `meta/interpreter.md`** — extract measurable acceptance criteria
-3. **Read `meta/phase-loader.md`** — load ONLY the files needed for the current phase
-4. **Follow the pipeline:** INTERPRET → GENERATE → FACTORY → PROVE → JUDGE → EVOLVE
+**This is the SINGLE entry point. There is no other bootstrap path.**
 
-## Phase-Specific Rules (LOAD ON DEMAND — never all at once)
+1. **Read `.meta-harness/PHASE_BRIEF.md`** — this file is updated on every state change. It tells you exactly:
+   - Which phase you're in and whether it's "in_progress", "blocked", or "complete"
+   - What the original acceptance criteria are (locked during INTERPRET)
+   - What to do next
+2. **If PHASE_BRIEF.md does not exist** (fresh start):
+   - Run self-update: `powershell scripts/check-version.ps1` (Windows) or `bash scripts/check-version.sh` (Linux/Mac)
+   - If `UPDATE_AVAILABLE=true`, run the update script, then restart
+   - Run `python meta/meta-orchestrator.py --status` to initialize
+3. **If PHASE_BRIEF.md says "status: complete"** → stop. Pipeline is done.
+4. **If PHASE_BRIEF.md says "status: blocked"** → diagnose and fix errors, then run `python meta/meta-orchestrator.py --unblock`
+5. **Resume from the phase indicated.** Do NOT re-execute completed phases.
+6. **Before ANY major action**, check the acceptance criteria. If your action does NOT trace to a criterion, STOP — you are experiencing task drift.
+
+## Pipeline: INTERPRET → GENERATE → FACTORY → PROVE → JUDGE → EVOLVE
+
+The pipeline is driven by `meta/meta-orchestrator.py`. This script:
+- Tracks phase state in `meta/pipeline-state.yaml`
+- Writes `.meta-harness/PHASE_BRIEF.md` on every state change (context-loss survival)
+- Locks acceptance criteria during INTERPRET to prevent task drift
+- Auto-advances when you run `--advance`
+
+## Phase-Specific Rules (LOAD ON DEMAND)
 
 | Phase | Load |
 |-------|------|
@@ -19,8 +35,31 @@ You are a META-HARNESS: you GENERATE complete, runnable, self-evolving harness p
 | GENERATE | `meta/harness-generator.md` + `seeds/planning/project-yaml-template.yaml` |
 | FACTORY | `meta/agent-factory.md` |
 | PROVE | `scripts/verify-generation.py` + `seeds/verification/auditor-engine.md` |
-| JUDGE | `seeds/guard.py` + `seeds/planning/orchestrator.py` |
+| JUDGE | `seeds/guard.py` + `seeds/orchestrator.py` |
 | EVOLVE | `evolution/framework.md` + `scripts/evolve.py` |
+
+## Auto-Advance Protocol
+
+**After EVERY phase execution, you MUST run:**
+```
+python meta/meta-orchestrator.py --advance
+```
+
+This does 4 things:
+1. Marks the current phase as complete
+2. Auto-advances to the next phase
+3. Prints detailed instructions for the next phase
+4. Updates `.meta-harness/PHASE_BRIEF.md` for context-loss recovery
+
+**You MUST then immediately execute the next phase.** Do NOT wait for the user.
+Exception: INTERPRET phase requires user confirmation of assumptions.
+
+## Task Drift Prevention
+
+1. **Acceptance criteria are LOCKED during INTERPRET** via `--save-acceptance-criteria`
+2. **PHASE_BRIEF.md always includes the original criteria** — check them before any work
+3. **If your action does not trace to a criterion → STOP and re-align**
+4. **Mark criteria as verified** with `--verify-criterion N` when evidence is produced
 
 ## Non-Negotiable (these 5 rules ALWAYS apply)
 

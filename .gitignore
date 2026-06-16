@@ -13,3 +13,5 @@ build/
 *.log
 .DS_Store
 Thumbs.db
+.meta-harness/
+meta/pipeline-state.yaml
