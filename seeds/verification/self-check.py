@@ -66,16 +66,25 @@ def run_verification(project_root: Path) -> dict:
             if captured:
                 result["errors"][-1]["parsed_errors"] = captured
 
-    lint_result = subprocess.run(
-        ["python", "-m", "ruff", "check", str(project_root / "src")],
-        capture_output=True, text=True, cwd=str(project_root),
+    # Check ruff availability before running — if not installed, skip lint
+    # with a warning rather than failing on a "command not found" error.
+    ruff_check = subprocess.run(
+        ["python", "-m", "ruff", "--version"],
+        capture_output=True, text=True,
     )
-    if lint_result.returncode != 0:
-        result["passed"] = False
-        result["errors"].append({"source": "lint", "output": lint_result.stdout})
-        captured = run_error_capture(project_root, lint_result.stdout, "lint")
-        if captured:
-            result["errors"][-1]["parsed_errors"] = captured
+    if ruff_check.returncode != 0:
+        print("⚠️  ruff not installed — skipping lint check. Install with: pip install ruff")
+    else:
+        lint_result = subprocess.run(
+            ["python", "-m", "ruff", "check", str(project_root / "src")],
+            capture_output=True, text=True, cwd=str(project_root),
+        )
+        if lint_result.returncode != 0:
+            result["passed"] = False
+            result["errors"].append({"source": "lint", "output": lint_result.stdout})
+            captured = run_error_capture(project_root, lint_result.stdout, "lint")
+            if captured:
+                result["errors"][-1]["parsed_errors"] = captured
 
     return result
 

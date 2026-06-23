@@ -70,6 +70,11 @@ LAYER_ARTIFACTS = {
     "evolution": ["framework.md", "genome.yaml", "log.yaml"],
 }
 
+# Marker file written into every generated project so that future regenerations
+# can safely distinguish a harness-generated directory from an unrelated one
+# before deleting it (prevents accidental data loss via shutil.rmtree).
+HARNESS_MARKER = ".harness-generated"
+
 
 def _get_src_dirs(template_name: str) -> list:
     src_layouts = {
@@ -158,13 +163,15 @@ def parse_template(template_file: Path) -> dict:
             items = re.findall(r"^- (.+)$", section, re.MULTILINE)
             result["constraints"] = [item.strip() for item in items]
         elif section.startswith("Workflows (seed"):
-            blocks = re.split(r"^- ", section)
+            blocks = re.split(r"^- ", section, flags=re.MULTILINE)
             for block in blocks:
                 if ":" in block:
-                    name = block.split(":")[0].strip()
-                    steps_match = re.search(r"→\s*(.+)$", block, re.MULTILINE)
-                    steps = steps_match.group(1).split(" → ") if steps_match else []
-                    result["workflows"].append({"name": name, "steps": [s.strip() for s in steps]})
+                    name = block.split(":", 1)[0].strip()
+                    # Take everything after the colon and split on → to preserve
+                    # the FIRST step (the old regex `→\s*(.+)$` dropped it).
+                    steps_part = block.split(":", 1)[1].strip()
+                    steps = [s.strip() for s in steps_part.split("→")] if "→" in steps_part else []
+                    result["workflows"].append({"name": name, "steps": steps})
         elif section.startswith("Agent Topology (seed"):
             lines = section.strip().split("\n")
             current_pattern = None
@@ -286,6 +293,7 @@ def customize_flow_control(output_dir: Path, template: dict) -> None:
     parsed = template.get("parsed", {})
     domain_workflows = parsed.get("workflows", [])
     if domain_workflows:
+        data.setdefault("workflows", {})
         for wf in domain_workflows:
             wf_name = wf.get("name", "custom").lower().replace(" ", "_")
             steps = wf.get("steps", [])
@@ -312,15 +320,23 @@ def customize_sub_agent_dispatch(output_dir: Path, template: dict) -> None:
     parsed = template.get("parsed", {})
     agent_topology = parsed.get("agent_topology", [])
     if agent_topology:
-        data["roles"] = []
+        # Merge with seed-defined roles instead of overwriting them.
+        # The seed sub-agent-dispatch.yaml defines planner/executor/verifier
+        # with full responsibilities/receives/produces — preserve those.
+        existing_roles = data.get("roles", [])
+        existing_names = {r.get("name", "").lower() for r in existing_roles}
         for agent in agent_topology:
             role_name = agent.get("role", "unknown").lower().split(":")[0].strip()
-            data["roles"].append({
+            if role_name in existing_names:
+                continue
+            existing_roles.append({
                 "name": role_name,
                 "responsibilities": [agent.get("role", "")],
                 "receives": [],
                 "produces": [],
             })
+            existing_names.add(role_name)
+        data["roles"] = existing_roles
 
     with open(dispatch_file, "w", encoding="utf-8") as f:
         yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
@@ -504,6 +520,9 @@ python tools/tool-discovery.py --need "capability"
 """
     (output_dir / "AGENTS.md").write_text(content, encoding="utf-8")
     (output_dir / "CLAUDE.md").write_text(f"# Redirect to AGENTS.md\n\nAll operating instructions are in AGENTS.md. Read that file.\n", encoding="utf-8")
+    # .cursorrules: Cursor reads this as its rules file. Redirect to AGENTS.md
+    # so the project works out-of-the-box for Cursor users (no manual copy needed).
+    (output_dir / ".cursorrules").write_text(f"# Redirect to AGENTS.md\n\nAll operating instructions are in AGENTS.md. Read that file.\n", encoding="utf-8")
 
 
 def generate_session_state(output_dir: Path, task: dict) -> None:
@@ -679,10 +698,21 @@ def generate(task: dict, template_name: str, output_dir: Path) -> None:
     print(f"Domain workflows from template: {len(template.get('parsed', {}).get('workflows', []))}")
 
     if output_dir.exists():
+        marker = output_dir / HARNESS_MARKER
+        has_content = any(output_dir.iterdir())
+        if has_content and not marker.exists():
+            print(f"ERROR: Output directory exists but is not a harness-generated project: {output_dir}")
+            print(f"       (no '{HARNESS_MARKER}' marker found). Refusing to delete a non-harness directory.")
+            print(f"       To proceed, manually delete or move '{output_dir}' and re-run.")
+            sys.exit(1)
         print(f"WARNING: Output directory exists, overwriting: {output_dir}")
         shutil.rmtree(output_dir)
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    # Write marker so future regenerations can safely identify this as a harness project.
+    (output_dir / HARNESS_MARKER).write_text(
+        "This directory was generated by meta-harness generate.py.\n", encoding="utf-8"
+    )
 
     scripts_dir = output_dir / "scripts"
     scripts_dir.mkdir(parents=True, exist_ok=True)

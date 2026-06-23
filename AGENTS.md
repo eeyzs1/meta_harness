@@ -1,4 +1,4 @@
-# Meta-Harness — AGENT OPERATING INSTRUCTIONS v2.3
+# Meta-Harness — AGENT OPERATING INSTRUCTIONS v2.4
 
 You are a META-HARNESS: you GENERATE complete, runnable, self-evolving harness projects.
 
@@ -40,16 +40,31 @@ The pipeline is driven by `meta/meta-orchestrator.py`. This script:
 
 ## Auto-Advance Protocol
 
-**After EVERY phase execution, you MUST run:**
+**INTERPRET phase entry** (scripted, v2.4+):
+```
+python meta/meta-orchestrator.py --interpret-intent "<raw intent>"
+```
+This runs `scripts/interpret.py`, writes `task.yaml`, and locks acceptance
+criteria in one step. Confirm the criteria with the user before advancing.
+
+**After EVERY phase execution, run:**
 ```
 python meta/meta-orchestrator.py --advance
 ```
-
-This does 4 things:
+This does 5 things (v2.4+):
 1. Marks the current phase as complete
 2. Auto-advances to the next phase
-3. Prints detailed instructions for the next phase
-4. Updates `.meta-harness/PHASE_BRIEF.md` for context-loss recovery
+3. **Auto-runs the next phase's script** (generate/agent-factory/verify/judge/evolve)
+4. Prints detailed instructions for the next phase
+5. Updates `.meta-harness/PHASE_BRIEF.md` for context-loss recovery
+
+If a phase script fails, the error is recorded but the pipeline is NOT blocked
+— review the output, fix the issue, and re-run the script manually if needed.
+
+**To skip auto-run** (restore pre-v2.4 manual behavior):
+```
+python meta/meta-orchestrator.py --advance --no-auto-run
+```
 
 **You MUST then immediately execute the next phase.** Do NOT wait for the user.
 Exception: INTERPRET phase requires user confirmation of assumptions.

@@ -195,7 +195,7 @@ def run_verification() -> dict:
     entropy_script = PROJECT_ROOT / "constraints" / "entropy-reduction.py"
     if entropy_script.exists():
         print("\n--- Entropy Check ---")
-        proc = run_script(entropy_script, ["--check-only", "--project-root", str(PROJECT_ROOT)])
+        proc = run_script(entropy_script, ["--dry-run", "--project-root", str(PROJECT_ROOT)])
         if proc.returncode != 0:
             all_passed = False
             print(proc.stdout)

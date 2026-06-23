@@ -30,24 +30,36 @@ def check_architecture_rules(project_root: Path) -> list:
     with open(rules_file, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
 
+    # Scope scans to the project's own source code (src/) rather than the
+    # entire project tree. Scanning the whole tree would flag the harness's
+    # own scripts (orchestrator.py, guard.py, verification/*.py) and produce
+    # false positives, since those scripts legitimately reference patterns
+    # that architecture rules forbid in application code (e.g. direct DB
+    # access in a repository seed).
+    src_dir = project_root / "src"
+    if not src_dir.exists():
+        return [{"type": "warning", "message": "No src/ directory found — architecture rules not applied"}]
+    py_files = list(src_dir.rglob("*.py"))
+
     for rule in data.get("rules", []):
         rule_id = rule.get("id", "unknown")
         pattern = rule.get("pattern", "")
-        if pattern:
-            for src_file in project_root.rglob("*.py"):
-                if ".git" in str(src_file) or "node_modules" in str(src_file):
-                    continue
-                try:
-                    content = src_file.read_text(encoding="utf-8")
-                    if re.search(pattern, content):
-                        violations.append({
-                            "type": "violation",
-                            "rule_id": rule_id,
-                            "file": str(src_file.relative_to(project_root)),
-                            "message": rule.get("description", "Architecture rule violation"),
-                        })
-                except Exception:
-                    pass
+        if not pattern:
+            continue
+        for src_file in py_files:
+            if ".git" in str(src_file) or "node_modules" in str(src_file):
+                continue
+            try:
+                content = src_file.read_text(encoding="utf-8")
+                if re.search(pattern, content):
+                    violations.append({
+                        "type": "violation",
+                        "rule_id": rule_id,
+                        "file": str(src_file.relative_to(project_root)),
+                        "message": rule.get("description", "Architecture rule violation"),
+                    })
+            except Exception:
+                pass
 
     return violations
 

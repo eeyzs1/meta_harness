@@ -11,7 +11,7 @@ A full project in `generated/[project-name]/` that includes:
 - AGENTS.md / CLAUDE.md — project-specific context files (AGENTS.md now slim: ~40 lines bootstrap)
 - Dynamic context loader — `meta/phase-loader.md` (Phase-level lazy loading, never load all rules at once)
 - Knowledge index — maps which files contain what knowledge
-- **NEW: Run modes** — fast (skip review) / full (default) / deep (+research +pair-review), set via `project.yaml` → `run_mode`
+- **NEW: Run modes** — fast (skip review) / full (default) / deep (+research +pair-review), set via `project.yaml` → `run_mode` (CONCEPTUAL — `project.yaml` not yet emitted)
 
 ### Layer 2: Tool Integration
 - Tool schema definitions (OpenAPI/function-call format)
@@ -25,11 +25,11 @@ A full project in `generated/[project-name]/` that includes:
 - Long-term memory structure (vector DB config or file-based index)
 - Snapshot/rollback mechanism (git-based)
 - Memory compression rules (what to keep, what to summarize, what to forget)
-- **NEW: STATE.md template** — human-readable phase progress tracking with Failure Log and Audit Results
-- **NEW: ROADMAP.md template** — full plan with phases, assumptions, risks, deliverables, acceptance criteria
+- **NEW: STATE.md template** — human-readable phase progress tracking with Failure Log and Audit Results (CONCEPTUAL — not yet emitted; use `memory/session-state.yaml`)
+- **NEW: ROADMAP.md template** — full plan with phases, assumptions, risks, deliverables, acceptance criteria (CONCEPTUAL — not yet emitted; use `task.yaml`)
 
 ### Layer 3.5: Phase-Aware Skills
-- **10 skills with full SKILL.md definitions** in `seeds/skills/`
+- **10 skills with full SKILL.md definitions** in `seeds/skills/` (loaded on demand by the phase loader; NOT copied into each generated project)
 - PLAN phase: `brainstorming` (design before code) + `writing-plans` (zero-context implementation plans)
 - IMPLEMENT phase: `tdd` (test-first) + `subagent-driven-dev` (parallel task dispatch + 2-stage review) or `executing-plans` (fallback)
 - TEST phase: `code-review` + `verification` (evidence-before-claims) + `systematic-debugging` (root cause first, on failure)
@@ -87,8 +87,8 @@ A full project in `generated/[project-name]/` that includes:
 
 ### Self-Evolution System
 - evolution/framework.md — evidence-driven evolution algorithm
-- evolution/genome.md — current evolvable state
-- evolution/log.md — evolution history
+- seeds/evolution/genome.yaml — current evolvable state (generation seed)
+- seeds/evolution/log.yaml — evolution history (generation seed)
 - Evolution triggers: periodic, reactive, emergency, adaptive
 
 ## Generation Steps
@@ -162,7 +162,12 @@ phases:
 5. **Layer 5 (Verification)** peaks in `test` and `audit` phases
 6. **Layer 6 (Feedback)** activates reactively — on failure, not on success
 
-## Single-File Configuration (project.yaml)
+## Single-File Configuration (project.yaml) — CONCEPTUAL
+
+> **Note:** `project.yaml` is a design target. The current `scripts/generate.py`
+> does NOT yet emit a `project.yaml`; configuration is spread across the
+> per-layer YAML files copied from `seeds/`. When a future generator upgrade
+> adds `project.yaml` emission, the per-layer files should be derived from it.
 
 In addition to the layered YAML configs, the generator produces a `project.yaml` as the single source of truth. All other configs reference this file:
 
@@ -222,71 +227,53 @@ memory:
 See `seeds/planning/project-yaml-template.yaml` for the full template with all options.
 
 ## Output Structure
+
+> This tree reflects what `scripts/generate.py` actually emits. Items marked
+> `CONCEPTUAL` are described above as design targets but are NOT yet
+> auto-generated.
+
 ```
 generated/[project-name]/
-├── AGENTS.md              ← Project context (auto-loaded by AI IDEs)
-├── CLAUDE.md              ← Project context (Claude Code)
-├── project.yaml           ← Single source of truth (all config in one file)
-├── phase-activation.yaml  ← Phase-aware layer activation rules
-├── STATE.md               ← Human-readable progress tracking
-├── ROADMAP.md             ← Full plan with phases and deliverables
-├── context/               ← Layer 1: Context Engineering
-├── tools/                 ← Layer 2: Tool Integration
-│   ├── adapter-interfaces.md  ←   Standardized adapter interfaces
-│   └── adapters/          ←   Adapter implementation references
-│       ├── executor-sub-agent.md
-│       ├── executor-claude-goal.md
-│       ├── executor-codex-task.md
-│       ├── work-item-file.md
-│       ├── work-item-github-issues.md
-│       ├── work-item-jira.md
-│       ├── ci-github-actions.md
-│       └── ci-noop.md
+├── .harness-generated     ← Marker file (prevents accidental rmtree on non-harness dirs)
+├── AGENTS.md              ← Project context + execution protocol (auto-loaded by AI IDEs)
+├── CLAUDE.md              ← Redirect to AGENTS.md (Claude Code)
+├── .cursorrules           ← Redirect to AGENTS.md (Cursor)
+├── task.yaml              ← The locked task definition from INTERPRET
+├── orchestrator.py        ← Layer 4 entry point: --status/--verify/--mark-complete/--evolve
+├── guard.py               ← Layer 5 entry point: --check pre-code guard
+├── project.yaml           ← CONCEPTUAL (not yet emitted; see note above)
+├── phase-activation.yaml  ← CONCEPTUAL (not yet emitted; see strategy above)
+├── STATE.md               ← CONCEPTUAL (not yet emitted; use memory/session-state.yaml)
+├── ROADMAP.md             ← CONCEPTUAL (not yet emitted; use task.yaml)
+├── src/                   ← Domain-specific source layout (e.g. src/api, src/services)
+├── tests/                 ← Test directory
+├── context/               ← Layer 1: Context Engineering (seed artifacts)
+├── tools/                 ← Layer 2: Tool Integration (seed artifacts)
 ├── memory/                ← Layer 3: Memory & State
-├── planning/              ← Layer 4: Planning & Orchestration
-│   ├── phase-loader.md    ←   Phase-level lazy loading (token optimization)
-│   ├── leaf-protocol.md   ←   Supervisor/Leaf dispatch protocol
-│   ├── planner-engine.md  ←   8-stage planning pipeline
-│   ├── executor-engine.md ←   Execution loop + 3-Strike recovery
-│   ├── project-yaml-template.yaml ← Full project config template (with run_mode)
-│   ├── protocol-template.md   ← Agent execution protocol (PROTOCOL.md)
-│   ├── phase-spec-template.md ← Phase specification template
-│   └── dag-builder.py     ←   Task decomposition engine
-├── verification/          ← Layer 5: Verification & Guardrails
-│   ├── recovery-and-audit.md ← 3-Strike recovery + audit protocol
-│   ├── auditor-engine.md  ←   Final audit engine (closes self-report loophole)
-│   ├── baseline-diff-check.md ← Unexpected file change detection
-│   ├── quality-gate.py    ←   Engineering standards enforcement
-│   └── anti-mock-check.py ←   Mock detection scanner
-├── skills/                ← Layer 3.5: Phase-Aware Skills
-│   ├── brainstorming.md   ←   Design before code (PLAN phase)
-│   ├── writing-plans.md   ←   Zero-context implementation plans (PLAN phase)
-│   ├── tdd.md             ←   Test-first development (IMPLEMENT phase)
-│   ├── subagent-driven-dev.md ← Parallel task dispatch + 2-stage review (IMPLEMENT)
-│   ├── executing-plans.md ←   Fallback inline execution (IMPLEMENT)
-│   ├── code-review.md     ←   Spec + quality review (TEST phase)
-│   ├── verification.md    ←   Evidence-before-claims gate (TEST phase)
-│   ├── systematic-debugging.md ← Root cause first (TEST phase, on failure)
-│   ├── dispatching-parallel-agents.md ← Cross-phase parallel dispatch
-│   └── finishing-a-development-branch.md ← Post-audit completion
-├── feedback/              ← Layer 6: Feedback & Self-Healing
-├── constraints/           ← Layer 7: Constraints & Entropy
-├── security/              ← Cross-cutting: Security & Isolation
-├── observability/         ← Cross-cutting: Observability & Governance
-│   └── transcript-blocks.md ← Standardized execution markers
+│   ├── session-state.yaml ←   Progress, completed/failed criteria, guard_log
+│   └── long-term/         ←   Long-term memory (.gitkeep)
+├── planning/              ← Layer 4: Planning & Orchestration (seed artifacts)
+├── verification/          ← Layer 5: Verification & Guardrails (seed artifacts)
+│   └── format-validators/ ←   JSON schemas (api-contract, config)
+├── feedback/              ← Layer 6: Feedback & Self-Healing (seed artifacts)
+├── constraints/           ← Layer 7: Constraints & Entropy (seed artifacts)
+├── security/              ← Cross-cutting: Security & Isolation (seed artifacts)
+├── observability/         ← Cross-cutting: Observability & Governance (seed artifacts)
 ├── evolution/             ← Self-Evolution System
-├── scripts/               ← Executable scripts
-│   ├── claim-run.sh       ←   Atomic run namespace creation
-│   ├── detect-env.sh      ←   Environment detection
-│   ├── detect-stack.sh    ←   Tech stack detection
-│   ├── summarize-repo.sh  ←   Repository structure summary
-│   ├── repo-state.sh      ←   Working tree state capture
-│   └── validate-phase.sh  ←   Phase completion validation
-└── .meta-harness/         ← Runtime directory
-    └── runs/<run-id>/     ←   Per-run isolation
-        ├── phases/        ←   Phase specs, results, evidence
-        └── memory/        ←   Run-specific memory
+│   ├── framework.md       ←   Evolution algorithm description
+│   ├── genome.yaml        ←   Current evolvable state
+│   ├── log.yaml           ←   Evolution history
+│   ├── innovation-engine.py ← Product analysis + innovation proposals
+│   └── domain-advancements.yaml ← Domain-specific advancement seeds
+└── scripts/               ← Executable scripts
+    └── evolve.py          ←   Evolution engine (copied from meta-harness)
 ```
+
+> **Not yet auto-generated** (referenced conceptually above): `skills/` directory
+> (skills live in the meta-harness `seeds/skills/` and are loaded on demand by
+> the phase loader, not copied into each generated project), and the shell
+> helpers `claim-run.sh` / `detect-env.sh` / `detect-stack.sh` /
+> `summarize-repo.sh` / `repo-state.sh` / `validate-phase.sh`.
 
 ## Anti-Patterns
 - Do NOT generate documentation-only layers — every layer must have executable artifacts

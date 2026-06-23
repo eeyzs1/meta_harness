@@ -1,27 +1,33 @@
 #!/usr/bin/env python3
 """
-META-ORCHESTRATOR v2.2: Drives the meta-harness pipeline with context-loss resilience.
+META-ORCHESTRATOR v2.4: Drives the meta-harness pipeline with context-loss resilience.
 
 This is THE entry point for the meta-harness. It drives the pipeline:
   INTERPRET -> GENERATE -> FACTORY -> PROVE -> JUDGE -> EVOLVE
 
-Key features (v2.2):
+Key features (v2.4):
 - Stateful pipeline tracking (reads/writes meta/pipeline-state.yaml)
 - PHASE_BRIEF.md: ultra-compact resume file survives context compression
 - Acceptance criteria anchoring: prevents task drift across turns
 - Auto-advance: phase N completes -> automatically starts phase N+1
 - Checkpoint enforcement: no phase can be skipped
+- force_phase resets verified_criteria to prevent stale evidence
+- --interpret-intent: scripted INTERPRET entry (runs interpret.py, locks criteria)
+- --advance auto-runs the next phase's script (generate/agent-factory/verify/judge/evolve)
 
 Usage:
     python meta/meta-orchestrator.py --status
+    python meta/meta-orchestrator.py --interpret-intent "I need a REST API for orders"
     python meta/meta-orchestrator.py --next
-    python meta/meta-orchestrator.py --advance
+    python meta/meta-orchestrator.py --advance            # auto-runs next phase script
+    python meta/meta-orchestrator.py --advance --no-auto-run  # advance without auto-run
     python meta/meta-orchestrator.py --save-acceptance-criteria "<criteria>"
     python meta/meta-orchestrator.py --reset
     python meta/meta-orchestrator.py --force-phase GENERATE
 """
 
 import argparse
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +37,7 @@ import yaml
 META_ROOT = Path(__file__).resolve().parent.parent
 STATE_FILE = META_ROOT / "meta" / "pipeline-state.yaml"
 BRIEF_FILE = META_ROOT / ".meta-harness" / "PHASE_BRIEF.md"
+TASK_FILE = META_ROOT / "task.yaml"
 
 PIPELINE_PHASES = [
     {
@@ -153,6 +160,190 @@ PHASE: EVOLVE -- Self-Improvement
 
 
 # ============================================================
+# Phase script automation (Design 6)
+# ============================================================
+# Maps each phase to the script that automates it. --advance runs the
+# NEXT phase's script after advancing, so the pipeline can progress
+# without manual script invocation. INTERPRET is special: it needs an
+# intent string (use --interpret-intent instead of --advance to start).
+
+PHASE_SCRIPTS = {
+    "GENERATE": {
+        "script": "scripts/generate.py",
+        "args": lambda state: ["--task", str(TASK_FILE)],
+        "sets_state": "generated_project_dir",
+    },
+    "FACTORY": {
+        "script": "scripts/agent-factory.py",
+        "args": lambda state: ["--project-root", state.get("generated_project_dir") or "."],
+    },
+    "PROVE": {
+        "script": "scripts/verify-generation.py",
+        "args": lambda state: [state.get("generated_project_dir") or "."],
+    },
+    "JUDGE": {
+        "script": "scripts/judge.py",
+        "args": lambda state: ["--project-root", state.get("generated_project_dir") or "."],
+    },
+    "EVOLVE": {
+        "script": "scripts/evolve.py",
+        "args": lambda state: ["--project-root", str(META_ROOT)],
+    },
+}
+
+
+def run_phase_script(state: dict, phase_id: str) -> dict:
+    """Run the automation script for the given phase.
+
+    Best-effort: on failure, records an error in state but does NOT block
+    the advance. The agent can review output, fix issues, and re-run the
+    script manually. Returns the updated state.
+    """
+    spec = PHASE_SCRIPTS.get(phase_id)
+    if not spec:
+        # INTERPRET has no auto-script (needs human intent input);
+        # unknown phases have nothing to run.
+        return state
+
+    script_path = META_ROOT / spec["script"]
+    if not script_path.exists():
+        msg = f"Phase script not found: {spec['script']}"
+        state["errors"].append(f"[{phase_id}] {datetime.now().isoformat()}: {msg}")
+        print(f"  ⚠️  {msg}")
+        save_state(state)
+        return state
+
+    # Build args; skip if a required arg (e.g. generated_project_dir) is missing.
+    try:
+        args = spec["args"](state)
+    except Exception as e:
+        msg = f"Could not build args for {phase_id}: {e}"
+        state["errors"].append(f"[{phase_id}] {datetime.now().isoformat()}: {msg}")
+        print(f"  ⚠️  {msg}")
+        save_state(state)
+        return state
+
+    if phase_id in ("FACTORY", "PROVE", "JUDGE") and not state.get("generated_project_dir"):
+        msg = f"Cannot run {phase_id}: generated_project_dir not set (run GENERATE first)"
+        state["errors"].append(f"[{phase_id}] {datetime.now().isoformat()}: {msg}")
+        print(f"  ⚠️  {msg}")
+        save_state(state)
+        return state
+
+    cmd = [sys.executable, str(script_path)] + args
+    print(f"\n  ▶️  Auto-running {phase_id}: {' '.join(cmd)}")
+    print("  " + "-" * 60)
+    try:
+        result = subprocess.run(cmd, cwd=str(META_ROOT), capture_output=False)
+        exit_code = result.returncode
+    except Exception as e:
+        msg = f"Phase script crashed: {e}"
+        state["errors"].append(f"[{phase_id}] {datetime.now().isoformat()}: {msg}")
+        print(f"  ❌ {msg}")
+        save_state(state)
+        return state
+
+    print("  " + "-" * 60)
+    if exit_code != 0:
+        msg = f"Phase script exited with code {exit_code}"
+        state["errors"].append(f"[{phase_id}] {datetime.now().isoformat()}: {msg}")
+        print(f"  ⚠️  {msg} — review output above, fix, and re-run manually if needed.")
+        save_state(state)
+        return state
+
+    # Post-run state updates.
+    print(f"  ✅ {phase_id} script completed successfully.")
+    if spec.get("sets_state") == "generated_project_dir":
+        # Detect the generated project dir from task.yaml name.
+        generated_dir = _detect_generated_dir()
+        if generated_dir:
+            state["generated_project_dir"] = str(generated_dir)
+            print(f"  📁 Generated project dir: {generated_dir}")
+
+    state["phase_history"].append({
+        "phase": phase_id,
+        "action": "script_executed",
+        "timestamp": datetime.now().isoformat(),
+    })
+    save_state(state)
+    return state
+
+
+def _detect_generated_dir() -> Path:
+    """Find the most recently created generated/<project-name>/ directory."""
+    generated_root = META_ROOT / "generated"
+    if not generated_root.exists():
+        return None
+    candidates = [d for d in generated_root.iterdir() if d.is_dir() and (d / ".harness-generated").exists()]
+    if not candidates:
+        return None
+    # Return the most recently modified one.
+    return max(candidates, key=lambda d: d.stat().st_mtime)
+
+
+def interpret_intent(state: dict, intent: str) -> dict:
+    """Run the interpreter on a raw intent string.
+
+    Calls scripts/interpret.py to produce a structured task definition,
+    writes it to task.yaml, locks the acceptance criteria, and sets the
+    project name. This is the scripted entry point for the INTERPRET phase.
+    """
+    script_path = META_ROOT / "scripts" / "interpret.py"
+    if not script_path.exists():
+        print(f"ERROR: interpret.py not found at {script_path}")
+        return state
+
+    cmd = [sys.executable, str(script_path), "--intent", intent, "--output", str(TASK_FILE)]
+    print(f"\n  ▶️  Running interpreter: {intent[:80]}...")
+    print("  " + "-" * 60)
+    try:
+        result = subprocess.run(cmd, cwd=str(META_ROOT), capture_output=False)
+    except Exception as e:
+        print(f"  ❌ Interpreter crashed: {e}")
+        return state
+    print("  " + "-" * 60)
+
+    if result.returncode != 0:
+        print(f"  ❌ Interpreter exited with code {result.returncode}")
+        return state
+
+    # Read the generated task.yaml to lock criteria + set project name.
+    if not TASK_FILE.exists():
+        print(f"  ❌ Interpreter did not produce {TASK_FILE}")
+        return state
+
+    with open(TASK_FILE, "r", encoding="utf-8") as f:
+        task = yaml.safe_load(f) or {}
+
+    criteria = task.get("acceptance_criteria", [])
+    if not criteria:
+        print("  ⚠️  Interpreter produced no acceptance criteria.")
+        return state
+
+    state["acceptance_criteria"] = criteria
+    state["verified_criteria"] = []
+    state["project_name"] = task.get("name", "unnamed")
+    state["phase_history"].append({
+        "phase": "INTERPRET",
+        "action": "interpreted",
+        "timestamp": datetime.now().isoformat(),
+    })
+    save_state(state)
+
+    print(f"\n  ✅ Interpretation complete.")
+    print(f"  Project: {state['project_name']}")
+    print(f"  Domain: {task.get('domain', 'unknown')}")
+    print(f"  Scale: {task.get('scale', 'unknown')}")
+    print(f"  Quality attributes: {task.get('quality_attributes', [])}")
+    print(f"  Acceptance criteria LOCKED ({len(criteria)} total):")
+    for i, c in enumerate(criteria, 1):
+        print(f"    {i}. {c}")
+    print(f"\n  Task definition written to: {TASK_FILE}")
+    print(f"  Confirm criteria with the user, then run: --advance")
+    return state
+
+
+# ============================================================
 # PHASE_BRIEF.md -- the context-loss survival mechanism
 # ============================================================
 # This file is written on every state change. It is designed to be
@@ -242,7 +433,7 @@ def save_state(state: dict) -> None:
 
 def _default_state() -> dict:
     return {
-        "pipeline_version": "2.2.0",
+        "pipeline_version": "2.4.0",
         "current_phase": "INTERPRET",
         "phase_order": [p["id"] for p in PIPELINE_PHASES],
         "completed_phases": [],
@@ -366,7 +557,7 @@ def show_next(state: dict) -> None:
     write_phase_brief(state)
 
 
-def advance_phase(state: dict) -> dict:
+def advance_phase(state: dict, auto_run: bool = True) -> dict:
     current = state.get("current_phase", "INTERPRET")
     completed = state.get("completed_phases", [])
     current_idx = get_current_phase_index(state)
@@ -377,6 +568,7 @@ def advance_phase(state: dict) -> dict:
         print("=" * 65)
         print("  BLOCKED: Cannot advance from INTERPRET without acceptance criteria.")
         print("  Run: python meta/meta-orchestrator.py --save-acceptance-criteria \"<criteria>\"")
+        print("  Or:  python meta/meta-orchestrator.py --interpret-intent \"<raw intent>\"")
         print("=" * 65)
         print()
         return state
@@ -421,6 +613,13 @@ def advance_phase(state: dict) -> dict:
     print("=" * 65)
 
     save_state(state)
+
+    # Auto-run the next phase's script (Design 6). Best-effort: failures
+    # are recorded in state["errors"] but do not block the advance. The
+    # agent can review output and re-run manually. Use --no-auto-run to skip.
+    if auto_run and next_phase["id"] in PHASE_SCRIPTS:
+        state = run_phase_script(state, next_phase["id"])
+
     return state
 
 
@@ -455,7 +654,11 @@ def verify_criterion(state: dict, criterion_index: int) -> dict:
         return state
 
     criterion = criteria[criterion_index - 1]
-    if criterion not in verified:
+    # Compare on stripped values so trailing whitespace / line-ending
+    # differences from YAML round-trips do not break matching.
+    normalized = criterion.strip()
+    normalized_verified = [v.strip() for v in verified]
+    if normalized not in normalized_verified:
         verified.append(criterion)
         state["verified_criteria"] = verified
         print(f"  Criterion {criterion_index} VERIFIED: {criterion}")
@@ -476,6 +679,9 @@ def force_phase(state: dict, phase_id: str) -> dict:
     state["current_phase"] = phase_id
     state["completed_phases"] = [p["id"] for p in PIPELINE_PHASES[:target_idx]]
     state["status"] = "in_progress"
+    # Reset verified criteria so stale evidence from a prior run does not
+    # mislead the agent into thinking criteria are already satisfied.
+    state["verified_criteria"] = []
     state["phase_history"].append({
         "phase": phase_id,
         "action": "force_jump",
@@ -550,12 +756,15 @@ def reset_pipeline() -> dict:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Meta-Orchestrator v2.2 -- Drives the meta-harness pipeline",
+        description="Meta-Orchestrator v2.4 -- Drives the meta-harness pipeline",
         epilog="Context-loss resilient. PHASE_BRIEF.md survives compression.",
     )
     parser.add_argument("--status", action="store_true", help="Show current pipeline status")
     parser.add_argument("--next", action="store_true", help="Show detailed instructions for current phase")
-    parser.add_argument("--advance", action="store_true", help="Mark current phase complete and advance")
+    parser.add_argument("--advance", action="store_true", help="Mark current phase complete and advance (auto-runs next phase script)")
+    parser.add_argument("--no-auto-run", action="store_true", help="With --advance: skip auto-running the next phase script")
+    parser.add_argument("--interpret-intent", default=None, metavar="INTENT",
+                        help="Run the interpreter on a raw intent string; locks criteria + writes task.yaml")
     parser.add_argument("--reset", action="store_true", help="Reset pipeline to initial state")
     parser.add_argument("--force-phase", default=None, metavar="PHASE",
                         help="Force jump to a specific phase")
@@ -599,6 +808,11 @@ def main():
         show_status(state)
         return
 
+    if args.interpret_intent:
+        state = interpret_intent(state, args.interpret_intent)
+        show_status(state)
+        return
+
     if args.verify_criterion is not None:
         state = verify_criterion(state, args.verify_criterion)
         show_status(state)
@@ -633,7 +847,7 @@ def main():
         return
 
     if args.advance:
-        state = advance_phase(state)
+        state = advance_phase(state, auto_run=not args.no_auto_run)
         return
 
     show_status(state)

@@ -46,7 +46,15 @@ if ($RemoteUrl -match "github.com") {
     $RawUrl = "$RawUrl/main/VERSION"
 
     try {
-        $LatestVersion = (Invoke-WebRequest -Uri $RawUrl -TimeoutSec 5 -UseBasicParsing).Content.Trim()
+        $fetched = (Invoke-WebRequest -Uri $RawUrl -TimeoutSec 5 -UseBasicParsing).Content.Trim()
+        # Validate the fetched content looks like a semantic version string.
+        # Defends against tampered/compromised responses that aren't real versions.
+        if ($fetched -match '^\d+\.\d+\.\d+$') {
+            $LatestVersion = $fetched
+        } else {
+            Write-Host "WARNING: Remote VERSION content is not a valid version string: $fetched"
+            $LatestVersion = $null
+        }
     } catch {
         $LatestVersion = $null
     }

@@ -7,7 +7,7 @@ First principles driven. Evidence based. Never stops at one pass.
 
 See AGENTS.md for the execution pipeline.
 
-## Architecture: 7 Layers + 4 Cross-Cutting + Self-Evolution + Innovation
+## Architecture: 7 Layers + 2 Cross-Cutting + Self-Evolution + Innovation
 
 Every generated harness project MUST have all of these layers with executable artifacts:
 
@@ -76,8 +76,7 @@ meta/
     topologies.md          ← Example generated topologies
 evolution/                 ← Meta-level evidence-driven self-evolution
   framework.md             ← Evolution algorithm (evidence-based)
-  genome.md                ← Current evolvable state snapshot
-  log.md                   ← Evolution history
+                             (genome.yaml / log.yaml live in seeds/evolution/ as generation seeds)
 templates/                 ← Domain templates (Generation Factory format)
   web-app/template.md      ← Each template specifies per-layer executable artifacts
   api-service/template.md
@@ -99,7 +98,7 @@ seeds/                     ← Seed artifacts for each layer (copied by generate
   guard.py                 ← Pre-action constraint guard (mock + simplification + tool diversity checks)
 scripts/                   ← Executable scripts (cross-platform Python)
   generate.py              ← Core generation pipeline: task → complete harness project
-  verify-generation.py     ← Verify 7+4 layer completeness of generated projects
+  verify-generation.py     ← Verify 7+2+evolution layer completeness of generated projects
   evolve.py                ← Evidence-driven evolution engine
   verify.py                ← Post-task verification (lint, typecheck, test, secrets)
   pre-task.py              ← Pre-task checks (task card, git status, blockers)
@@ -107,8 +106,7 @@ scripts/                   ← Executable scripts (cross-platform Python)
 generated/                 ← Output: generated harness projects (git-ignored)
 memory/                    ← Meta-level memory (compounds over time)
   decisions.md             ← Architecture Decision Records
-  generation-log.md        ← Generation history (human-readable)
-  generation-log.yaml      ← Generation history (machine-readable)
+  generation-log.yaml      ← Generation history (maintained by generate.py, human & machine readable)
   meta-mistakes.md         ← Meta-harness mistake log
   progress.md              ← Cross-session progress tracking
   task-patterns.md         ← Known task pattern catalog

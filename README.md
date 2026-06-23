@@ -33,7 +33,7 @@
 |------|---------|---------|------------|
 | **Trae** | `AGENTS.md` | ✅ 自动加载 | 打开项目即可 |
 | **Claude Code** | `CLAUDE.md` | ✅ 自动加载 | 打开项目即可 |
-| **Cursor** | `.cursorrules` | ⚠️ 需手动 | 把 `AGENTS.md` 内容复制到 `.cursorrules` |
+| **Cursor** | `.cursorrules` | ✅ 自动加载 | 打开项目即可（generate.py 自动生成 .cursorrules 重定向到 AGENTS.md） |
 | **其他 AI 工具** | — | ⚠️ 需手动 | 在对话中手动发送 `AGENTS.md` 的内容作为上下文 |
 
 **关键：AI 必须读到规则文件才能按管道工作。** 如果 AI 没读到规则，它就会跳过管道直接干活——这不是我们想要的。
@@ -137,8 +137,7 @@ meta/               ← 编译管道的四个阶段
 │
 evolution/          ← 元级自我进化系统
   framework.md        进化算法（基因组、适应度、变异、选择）
-  genome.md           当前可进化状态（什么可以变异）
-  log.md              进化历史（化石记录）
+                       （genome.yaml / log.yaml 在 seeds/evolution/ 作为生成种子）
 │
 templates/          ← 领域模板（生成工厂格式，每层指定可执行产物）
   web-app/            Web 应用
@@ -166,8 +165,7 @@ seeds/              ← 种子产物（每层的可执行模板文件，由 gene
 │
 generated/          ← 生成输出（每次编译的结果，git-ignored）
 memory/             ← 元知识（跨项目积累，越用越强）
-  generation-log.md   每次生成都有记录（人类可读）
-  generation-log.yaml 每次生成的机器可读记录（由 generate.py 维护）
+  generation-log.yaml 每次生成的记录（由 generate.py 维护，人类与机器可读）
   meta-mistakes.md    生成失败 → 管道改进
   task-patterns.md    已知任务模式（加速解释）
   decisions.md        架构决策记录
@@ -337,7 +335,7 @@ AI 代理读声明层，翻译成当前平台的命令。人类可以直接跑 P
    - `meta/orchestrator.md` — 规划执行（跨所有层协调）
 3. **输出到 `generated/[project-name]/`**
 4. **运行 `scripts/verify-generation.py`** 验证7+2层完整性
-5. **记录每次生成到 `memory/generation-log.md`**
+5. **记录每次生成到 `memory/generation-log.yaml`**
 6. **记录每次失败到 `memory/meta-mistakes.md`**
 7. **需求满足后，运行创新引擎** — `python seeds/evolution/innovation-engine.py --project-root <dir>`
 

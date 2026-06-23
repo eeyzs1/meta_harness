@@ -14,6 +14,7 @@ Usage:
 """
 
 import json
+import py_compile
 import sys
 from pathlib import Path
 
@@ -101,6 +102,23 @@ def count_artifacts(layer_dir: Path) -> dict:
     return counts
 
 
+def check_python_syntax(layer_dir: Path) -> list:
+    """Compile-check every .py file in the layer. Returns list of syntax errors.
+
+    An empty .py file passes extension counting but is not truly executable;
+    this validates that .py artifacts at least parse correctly.
+    """
+    errors = []
+    if not layer_dir.exists():
+        return errors
+    for f in layer_dir.rglob("*.py"):
+        try:
+            py_compile.compile(str(f), doraise=True)
+        except py_compile.PyCompileError as e:
+            errors.append({"file": str(f.relative_to(layer_dir)), "error": str(e)})
+    return errors
+
+
 def verify_layer(project_dir: Path, layer: str, requirements: dict) -> dict:
     layer_dir = project_dir / layer
     result = {
@@ -110,6 +128,7 @@ def verify_layer(project_dir: Path, layer: str, requirements: dict) -> dict:
         "missing_files": [],
         "missing_scripts": [],
         "artifact_counts": count_artifacts(layer_dir),
+        "syntax_errors": [],
         "has_executable": False,
         "is_doc_only": True,
         "passed": False,
@@ -131,13 +150,15 @@ def verify_layer(project_dir: Path, layer: str, requirements: dict) -> dict:
     counts = result["artifact_counts"]
     result["has_executable"] = counts["executable"] > 0
     result["is_doc_only"] = counts["total"] > 0 and counts["executable"] == 0 and counts["config"] == 0
+    result["syntax_errors"] = check_python_syntax(layer_dir)
 
     min_exec = requirements.get("min_executable", 0)
     has_required = len(result["missing_files"]) == 0 and len(result["missing_scripts"]) == 0
     meets_min_exec = counts["executable"] >= min_exec
     not_doc_only = not result["is_doc_only"]
+    no_syntax_errors = len(result["syntax_errors"]) == 0
 
-    result["passed"] = has_required and meets_min_exec and not_doc_only
+    result["passed"] = has_required and meets_min_exec and not_doc_only and no_syntax_errors
     return result
 
 
@@ -193,6 +214,11 @@ def print_results(results: dict) -> None:
             print(f"      Missing files: {', '.join(info['missing_files'])}")
         if info["missing_scripts"]:
             print(f"      Missing scripts: {', '.join(info['missing_scripts'])}")
+        if info.get("syntax_errors"):
+            print(f"      Syntax errors: {len(info['syntax_errors'])}")
+            for se in info["syntax_errors"]:
+                first_line = se["error"].splitlines()[0] if se["error"] else ""
+                print(f"        - {se['file']}: {first_line}")
 
     print("\n" + "=" * 70)
     if results["overall_passed"]:
