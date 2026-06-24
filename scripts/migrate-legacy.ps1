@@ -1,4 +1,4 @@
-# migrate-legacy.ps1 — Windows PowerShell 老项目迁移脚本
+﻿# migrate-legacy.ps1 — Windows PowerShell 老项目迁移脚本
 # 用法：cd ~/my-old-project && powershell migrate-legacy.ps1
 # 注：需要在包含旧 .meta-harness/ 目录的项目根目录下运行
 

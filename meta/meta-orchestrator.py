@@ -34,6 +34,11 @@ from pathlib import Path
 
 import yaml
 
+# Ensure UTF-8 stdout/stderr on Windows (prevents UnicodeEncodeError with emoji)
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 META_ROOT = Path(__file__).resolve().parent.parent
 STATE_FILE = META_ROOT / "meta" / "pipeline-state.yaml"
 BRIEF_FILE = META_ROOT / ".meta-harness" / "PHASE_BRIEF.md"

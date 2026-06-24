@@ -21,6 +21,11 @@ import yaml
 from datetime import datetime
 from pathlib import Path
 
+# Ensure UTF-8 stdout/stderr on Windows (prevents UnicodeEncodeError with emoji)
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 META_DIR = Path(__file__).resolve().parent.parent / "meta"
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 SEEDS_DIR = Path(__file__).resolve().parent.parent / "seeds"

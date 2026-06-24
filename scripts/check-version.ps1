@@ -1,4 +1,4 @@
-# check-version.ps1 — Windows PowerShell 版本检查脚本
+﻿# check-version.ps1 — Windows PowerShell 版本检查脚本
 # 用法：powershell -ExecutionPolicy Bypass -File scripts/check-version.ps1
 
 param()

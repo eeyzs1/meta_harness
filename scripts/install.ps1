@@ -1,4 +1,4 @@
-# install.ps1 — Windows PowerShell 安装 meta-harness
+﻿# install.ps1 — Windows PowerShell 安装 meta-harness
 # 用法：powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/eeyzs1/meta_harness/main/scripts/install.ps1 | iex"
 #      或：在已有 submodule 的项目中：powershell meta-harness/scripts/install.ps1 [repo-url]
 # 可选参数：$args[0] 显式指定要 add 的仓库 URL（覆盖自动探测）

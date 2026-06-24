@@ -1,4 +1,4 @@
-# verify.ps1 — Windows PowerShell meta-harness 安装健康检查
+﻿# verify.ps1 — Windows PowerShell meta-harness 安装健康检查
 # 用法：powershell meta-harness/scripts/verify.ps1
 
 param()

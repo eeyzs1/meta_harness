@@ -25,6 +25,11 @@ import re
 import sys
 from pathlib import Path
 
+# Ensure UTF-8 stdout/stderr on Windows (prevents UnicodeEncodeError with emoji)
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 MOCK_CLASS_PATTERNS = [
     (r'\bclass\s+(Mock\w+|Fake\w+|Stub\w+|Dummy\w+|Simulated\w+)', "mock_class_name"),
 ]

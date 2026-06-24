@@ -26,10 +26,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Ensure UTF-8 stdout/stderr on Windows (prevents UnicodeEncodeError with emoji)
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 
 def run_command(cmd: list, cwd: Path = None) -> tuple:
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd)
         return result.returncode, result.stdout, result.stderr
     except FileNotFoundError:
         return -1, "", f"Command not found: {cmd[0]}"

@@ -1,4 +1,4 @@
-# bootstrap-update.ps1 — Windows PowerShell 泛化入口
+﻿# bootstrap-update.ps1 — Windows PowerShell 泛化入口
 # 在任何项目中更新/安装 meta-harness
 #
 # 用法：

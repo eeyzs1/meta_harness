@@ -1,4 +1,4 @@
-# update-harness.ps1 — Windows PowerShell 一键更新脚本
+﻿# update-harness.ps1 — Windows PowerShell 一键更新脚本
 # 用法：powershell meta-harness/scripts/update-harness.ps1
 # 做三件事：git pull → migrate project.yaml → git commit
 

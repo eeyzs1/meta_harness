@@ -1,4 +1,4 @@
-# uninstall.ps1 — Windows PowerShell 移除 meta-harness
+﻿# uninstall.ps1 — Windows PowerShell 移除 meta-harness
 # 用法：powershell meta-harness/scripts/uninstall.ps1
 # 注意：会删除 submodule、.gitmodules 中的 meta-harness 条目、AGENTS.md
 #       .meta-harness/ 目录不会被删除

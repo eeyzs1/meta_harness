@@ -17,6 +17,11 @@ from pathlib import Path
 
 import yaml
 
+# Ensure UTF-8 stdout/stderr on Windows (prevents UnicodeEncodeError with emoji)
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 
 def load_retry_config(project_root: Path) -> dict:
     retry_file = project_root / "feedback" / "retry-config.yaml"
@@ -37,7 +42,7 @@ def run_error_capture(project_root: Path, error_output: str, source: str) -> lis
     try:
         proc = subprocess.run(
             [sys.executable, str(error_capture), "--error-output", tmp_path, "--source", source],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         if proc.returncode == 0 and proc.stdout.strip():
             data = yaml.safe_load(proc.stdout) or {}
@@ -56,7 +61,7 @@ def run_verification(project_root: Path) -> dict:
     if consistency_script.exists():
         proc = subprocess.run(
             [sys.executable, str(consistency_script), "--project-root", str(project_root)],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         if proc.returncode != 0:
             result["passed"] = False
@@ -70,14 +75,14 @@ def run_verification(project_root: Path) -> dict:
     # with a warning rather than failing on a "command not found" error.
     ruff_check = subprocess.run(
         ["python", "-m", "ruff", "--version"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if ruff_check.returncode != 0:
         print("⚠️  ruff not installed — skipping lint check. Install with: pip install ruff")
     else:
         lint_result = subprocess.run(
             ["python", "-m", "ruff", "check", str(project_root / "src")],
-            capture_output=True, text=True, cwd=str(project_root),
+            capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(project_root),
         )
         if lint_result.returncode != 0:
             result["passed"] = False

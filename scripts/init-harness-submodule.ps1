@@ -1,4 +1,4 @@
-# init-harness-submodule.ps1 — Windows PowerShell 初始化脚本
+﻿# init-harness-submodule.ps1 — Windows PowerShell 初始化脚本
 # 前提：已在项目中运行 git submodule add ... meta-harness
 # 用法：cd ~/my-project && powershell meta-harness/scripts/init-harness-submodule.ps1
 

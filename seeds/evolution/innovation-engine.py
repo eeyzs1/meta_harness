@@ -18,6 +18,11 @@ from pathlib import Path
 
 import yaml
 
+# Ensure UTF-8 stdout/stderr on Windows (prevents UnicodeEncodeError with emoji)
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 DOMAIN_ADVANCEMENT_MAP = {
     "web-app": "domain-advancements.yaml",
     "api-service": "domain-advancements-api.yaml",
@@ -33,7 +38,7 @@ def load_product_state(project_root: Path) -> dict:
         import subprocess
         proc = subprocess.run(
             [sys.executable, str(analyzer), "--project-root", str(project_root)],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         if proc.returncode == 0 and proc.stdout.strip():
             return yaml.safe_load(proc.stdout) or {}

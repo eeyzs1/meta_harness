@@ -13,6 +13,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Ensure UTF-8 stdout/stderr on Windows (prevents UnicodeEncodeError with emoji)
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 
 def check_task_card(task_file: Path) -> list:
     errors = []
@@ -41,7 +46,7 @@ def check_git_status(project_root: Path) -> list:
     try:
         result = subprocess.run(
             ["git", "status", "--porcelain"],
-            capture_output=True, text=True, cwd=project_root,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=project_root,
         )
         if result.stdout.strip():
             errors.append("FAIL: Working tree has uncommitted changes. Commit or stash before starting.")

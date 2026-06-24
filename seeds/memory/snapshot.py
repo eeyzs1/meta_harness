@@ -17,12 +17,19 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# Ensure UTF-8 stdout/stderr on Windows (prevents UnicodeEncodeError with emoji)
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 
 def git_run(args: list, cwd: Path = None) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git"] + args,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         cwd=cwd or Path.cwd(),
     )
 

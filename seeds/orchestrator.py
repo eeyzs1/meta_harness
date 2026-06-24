@@ -31,6 +31,11 @@ from pathlib import Path
 
 import yaml
 
+# Ensure UTF-8 stdout/stderr on Windows (prevents UnicodeEncodeError with emoji)
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 
@@ -38,7 +43,7 @@ def run_script(script_path: Path, args: list = None) -> subprocess.CompletedProc
     cmd = [sys.executable, str(script_path)]
     if args:
         cmd.extend(args)
-    return subprocess.run(cmd, capture_output=True, text=True, cwd=str(PROJECT_ROOT))
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(PROJECT_ROOT))
 
 
 def load_task() -> dict:

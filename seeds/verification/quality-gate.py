@@ -27,6 +27,11 @@ import re
 import sys
 from pathlib import Path
 
+# Ensure UTF-8 stdout/stderr on Windows (prevents UnicodeEncodeError with emoji)
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 HARDCODED_CONFIG_PATTERNS = [
     (r'(?:url|endpoint|host|base_url)\s*[:=]\s*["\']https?://', "hardcoded_url"),
     (r'(?:api_key|apikey|api_secret|secret_key|token|password)\s*[:=]\s*["\'][^\'"]{8,}["\']', "hardcoded_secret"),

@@ -27,6 +27,11 @@ try:
 except ImportError:
     yaml = None
 
+# Ensure UTF-8 stdout/stderr on Windows (prevents UnicodeEncodeError with emoji)
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 TOOL_EVALUATION_CRITERIA = [
     {
         "name": "fit_for_purpose",

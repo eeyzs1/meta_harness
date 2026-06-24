@@ -18,6 +18,11 @@ import py_compile
 import sys
 from pathlib import Path
 
+# Ensure UTF-8 stdout/stderr on Windows (prevents UnicodeEncodeError with emoji)
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 LAYER_REQUIREMENTS = {
     "context": {
         "description": "Layer 1: Context Engineering",

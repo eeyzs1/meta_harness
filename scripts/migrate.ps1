@@ -1,4 +1,4 @@
-# migrate.ps1 — Windows PowerShell project.yaml schema 迁移脚本
+﻿# migrate.ps1 — Windows PowerShell project.yaml schema 迁移脚本
 # 用法：powershell migrate.ps1 -ProjectYamlPath <path-to-project.yaml>
 # 框架更新时，检测 schema 版本并自动迁移
 
