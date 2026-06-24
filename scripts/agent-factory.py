@@ -16,6 +16,7 @@ Usage:
 """
 
 import argparse
+import math
 import re
 import sys
 from pathlib import Path
@@ -95,6 +96,98 @@ def load_yaml(path, required=True):
         return None
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+# --- 复杂度驱动的 agent 拓扑（第一性原理：agent 数来自 S，非 seed 复制）---
+
+def _eval_factor_expr(expr, profile):
+    """评估因子谓词（condition）或公式（count）。expr 是配置内常量，eval 可接受。
+
+    返回 bool（condition）或 int/数值（count）。
+    """
+    if isinstance(expr, int):
+        return expr
+    env = {
+        "tier": profile.get("tier", "standard"),
+        "S": profile.get("scope", 3),
+        "C": profile.get("criticality", 3),
+        "N": profile.get("novelty", 3),
+        "K": profile.get("coupling", 3),
+        "ceil": math.ceil, "max": max, "min": min,
+    }
+    try:
+        return eval(str(expr), {"__builtins__": {}}, env)
+    except Exception:
+        # 谓词（含比较符）解析失败默认 False；公式默认 1
+        return False if any(c in str(expr) for c in "><=") else 1
+
+
+def load_profile(project_root: Path) -> dict:
+    """读 harness-profile.yaml 的 factors；回退 task.yaml 的 complexity；再回退默认。"""
+    profile_file = project_root / "harness-profile.yaml"
+    if profile_file.exists():
+        with open(profile_file, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        factors = data.get("factors", {}) or {}
+        return {
+            "tier": data.get("tier", "standard"),
+            "scope": factors.get("scope", 3),
+            "criticality": factors.get("criticality", 3),
+            "novelty": factors.get("novelty", 3),
+            "coupling": factors.get("coupling", 3),
+        }
+    task = load_yaml(project_root / "task.yaml", required=False) or {}
+    cx = task.get("complexity") or {}
+    return {
+        "tier": cx.get("tier", "standard"),
+        "scope": cx.get("scope", 3),
+        "criticality": cx.get("criticality", 3),
+        "novelty": cx.get("novelty", 3),
+        "coupling": cx.get("coupling", 3),
+    }
+
+
+def derive_roles(dispatch: dict, profile: dict) -> list:
+    """从 prototypes + profile 实例化 roles。无 prototypes 时回退 roles（向后兼容）。
+
+    第一性原理：agent 数应从 Scope 推导（planner×1 + executor×⌈S/2⌉ + verifier×1），
+    附加角色由 C/K/N 门控，而非 seed 复制的固定 3 角色。
+    """
+    prototypes = (dispatch or {}).get("prototypes")
+    if not prototypes:
+        # 回退旧格式：直接返回 roles
+        return list((dispatch or {}).get("roles", []) or [])
+
+    roles = []
+    for proto_name, proto in prototypes.items():
+        # 评估 condition 门控
+        condition = proto.get("condition")
+        if condition and not _eval_factor_expr(condition, profile):
+            continue
+        # 求值 count（整数或公式字符串如 "ceil(S/2)"）
+        count = proto.get("count", 1)
+        if isinstance(count, str):
+            count = _eval_factor_expr(count, profile)
+        count = max(1, int(count))
+        for i in range(count):
+            name = proto_name if count == 1 else f"{proto_name}-{i}"
+            roles.append({
+                "name": name,
+                "responsibilities": list(proto.get("responsibilities", []) or []),
+                "receives": list(proto.get("receives", []) or []),
+                "produces": list(proto.get("produces", []) or []),
+            })
+    return roles
+
+
+def compute_context_budget(profile: dict) -> int:
+    """上下文预算 = 500 + 100×max(0,S-2) + 150×max(0,N-2)。
+
+    S 驱动（更多关注点需更多上下文）+ N 驱动（更高新颖需更多领域上下文）。
+    """
+    S = profile.get("scope", 3)
+    N = profile.get("novelty", 3)
+    return 500 + 100 * max(0, S - 2) + 150 * max(0, N - 2)
 
 
 def extract_workflow_step_names(workflow):
@@ -202,7 +295,7 @@ def assign_criteria(roles, acceptance_criteria):
     return assignments
 
 
-def build_agent_config(role, assigned_workflows, assigned_criteria):
+def build_agent_config(role, assigned_workflows, assigned_criteria, context_budget=None):
     """Build the per-role agent configuration dict."""
     responsibilities = list(role.get("responsibilities", []) or [])
     receives = list(role.get("receives", []) or [])
@@ -213,6 +306,9 @@ def build_agent_config(role, assigned_workflows, assigned_criteria):
 
     tools = [{"name": item, "access": "read"} for item in receives]
     tools += [{"name": item, "access": "write"} for item in produces]
+
+    # 上下文预算：由 compute_context_budget(S,N) 驱动，回退 DEFAULT_MAX_CONTEXT_LINES
+    budget = context_budget if context_budget is not None else DEFAULT_MAX_CONTEXT_LINES
 
     # Fresh list copies per field so PyYAML does not emit shared anchors/aliases
     # between scope and handoff (keeps the output flat and readable).
@@ -229,7 +325,7 @@ def build_agent_config(role, assigned_workflows, assigned_criteria):
             },
             "boundaries": {
                 "cannot": list(DEFAULT_CANNOT),
-                "max_context_lines": DEFAULT_MAX_CONTEXT_LINES,
+                "max_context_lines": budget,
             },
             "handoff": {
                 "input_format": list(receives),
@@ -342,10 +438,17 @@ def run_factory(project_root, dry_run):
     dispatch = load_yaml(project_root / "planning" / "sub-agent-dispatch.yaml", required=True)
     flow = load_yaml(project_root / "planning" / "flow-control.yaml", required=False) or {}
 
-    roles = (dispatch or {}).get("roles", []) or []
+    # 复杂度驱动：从 harness-profile/task.yaml 加载 profile，推导 roles 与上下文预算
+    profile = load_profile(project_root)
+    roles = derive_roles(dispatch, profile)
+    context_budget = compute_context_budget(profile)
     if not roles:
-        print("ERROR: No roles found in planning/sub-agent-dispatch.yaml")
+        print("ERROR: No roles derived from sub-agent-dispatch.yaml (neither prototypes nor roles)")
         sys.exit(1)
+
+    print(f"Complexity profile: tier={profile['tier']} S={profile['scope']} "
+          f"C={profile['criticality']} N={profile['novelty']} K={profile['coupling']}")
+    print(f"Derived {len(roles)} agent role(s); context_budget={context_budget}")
 
     workflows = flow.get("workflows", {}) or {}
     acceptance_criteria = task.get("acceptance_criteria", []) or []
@@ -360,10 +463,14 @@ def run_factory(project_root, dry_run):
             role,
             workflow_assignments.get(rname, []),
             criteria_assignments.get(rname, []),
+            context_budget=context_budget,
         )
         configs.append((rname, cfg))
 
     topology = compute_topology(roles)
+    # 把 context_budget 写入 topology 供运行时读取
+    topology["topology"]["context_budget"] = context_budget
+    topology["topology"]["complexity_profile"] = profile
 
     print_summary(configs, project_root, dry_run)
 

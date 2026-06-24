@@ -240,6 +240,119 @@ def derive_unknowns(intent: str, domain: str, scale: str, quality_attrs: list) -
     return unknowns if unknowns else ["No specific unknowns detected — confirm assumptions with user"]
 
 
+# 复杂度因子词表（第一性原理：difficulty 是伪概念，拆为 S/C/N/K 四正交因子）
+HIGH_COST_WORDS = [
+    "payment", "prod", "production", "delete", "migrate", "migration",
+    "security", "auth", "money", "deploy", "release", "付费", "生产",
+    "删除", "迁移", "上线", "支付",
+]
+LOW_COST_WORDS = ["test", "demo", "prototype", "sandbox", "试验", "原型", "示例"]
+COUPLING_WORDS = [
+    "integrate", "integration", "refactor", "migration", "cross", "shared",
+    "contract", "sync", "集成", "重构", "跨", "共享", "联调",
+]
+GREENFIELD_WORDS = ["greenfield", "from scratch", "全新", "new project", "blank slate"]
+# 框架/版本模式：用于 Novelty 因子判断 hard_constraints 是否提及具体技术栈
+FRAMEWORK_PATTERN = re.compile(
+    r"(react|vue|angular|svelte|next|nuxt|fastapi|django|flask|express|"
+    r"spring|rails|gin|echo|actix|tokio|graphql|grpc|kafka|redis|"
+    r"postgres|mysql|mongo|elasticsearch|kubernetes)"
+    r"|\b[\w.-]+\s*\d+\.\d+\b",
+    re.IGNORECASE,
+)
+
+
+def _domain_match_score(intent: str) -> int:
+    """返回 intent 与所有 domain 关键词的最高匹配数（用于判断 domain 置信度）。"""
+    intent_lower = intent.lower()
+    scores = [sum(1 for kw in keywords if kw in intent_lower)
+              for keywords in DOMAIN_KEYWORDS.values()]
+    return max(scores) if scores else 0
+
+
+def _clamp(value: int, low: int = 1, high: int = 5) -> int:
+    return max(low, min(high, value))
+
+
+def classify_complexity(intent: str, domain: str, scale: str, quality_attrs: list,
+                        hard_constraints: list, acceptance_criteria: list) -> dict:
+    """从第一性原理推导任务的四个正交复杂度因子与派生 tier。
+
+    difficulty 是伪概念，拆为 S/C/N/K 四正交因子：
+      - Scope (S): 独立关注点数 → 驱动 agent 数、上下文预算
+      - Criticality (C): 失效代价 → 驱动验证严格度、人工 gate
+      - Novelty (N): 距训练分布/已积累知识 → 驱动知识库质量
+      - Coupling (K): 跨组件咬合度 → 驱动一致性检查、架构规则
+    每因子 1-5。tier 为粗粒度层裁剪派生量。
+    """
+    intent_lower = intent.lower()
+    goal = extract_goal(intent)
+    constraint_text = " ".join(hard_constraints or []).lower()
+
+    # --- Scope (S): 独立关注点数 ---
+    # 前 3 条准则是领域模板基线，不计入额外 scope；超过的才代表更多关注点
+    conjunctions = len(re.findall(r"\band\b|\+|和|以及|同时", goal, re.IGNORECASE))
+    scale_weight = {"personal": 0, "team": 1, "organization": 2, "public": 2}.get(scale, 1)
+    criteria_count = len(acceptance_criteria) if acceptance_criteria else 0
+    extra_criteria = max(0, criteria_count - 3)
+    scope = _clamp(1 + conjunctions + scale_weight + int(extra_criteria * 0.5))
+
+    # --- Criticality (C): 失效代价（不可逆性 × 爆炸半径） ---
+    criticality = 1
+    for w in HIGH_COST_WORDS:
+        if w in intent_lower or w in constraint_text:
+            criticality += 2
+    for w in LOW_COST_WORDS:
+        if w in intent_lower or w in constraint_text:
+            criticality -= 1
+    criticality = _clamp(criticality)
+
+    # --- Novelty (N): 距训练分布/已积累知识 ---
+    # domain 低置信度（匹配分低）→ 任务可能不在常见领域 → novelty 高
+    # 注意：match_score==0 也可能源于关键词表不全，故保守 +1（非 +2）
+    novelty = 1
+    match_score = _domain_match_score(intent)
+    if match_score == 0:
+        novelty += 1  # 无任何 domain 关键词命中，可能是陌生领域
+    elif match_score == 1:
+        novelty += 1  # 弱匹配
+    # hard_constraints 提及具体框架/版本 → 技术栈明确但可能不常见 → +1/条（最多 +2）
+    framework_hits = 0
+    for hc in (hard_constraints or []):
+        if FRAMEWORK_PATTERN.search(str(hc)):
+            framework_hits += 1
+    novelty += min(2, framework_hits)
+    novelty = _clamp(novelty)
+
+    # --- Coupling (K): 跨组件咬合度 ---
+    # 用 in 子串匹配（\b 词边界对中文无效）
+    coupling = 2
+    combined_text = intent_lower + " " + constraint_text
+    coupling_hits = sum(1 for w in COUPLING_WORDS if w in combined_text)
+    coupling += min(3, coupling_hits)
+    for w in GREENFIELD_WORDS:
+        if w in intent_lower:
+            coupling -= 1
+            break
+    coupling = _clamp(coupling)
+
+    # --- tier: 粗粒度层裁剪派生量 ---
+    if scope <= 2 and criticality <= 2 and novelty <= 2 and coupling <= 2:
+        tier = "minimal"
+    elif scope >= 4 or criticality >= 4 or novelty >= 4:
+        tier = "full"
+    else:
+        tier = "standard"
+
+    return {
+        "scope": scope,
+        "criticality": criticality,
+        "novelty": novelty,
+        "coupling": coupling,
+        "tier": tier,
+    }
+
+
 def derive_assumptions(intent: str, domain: str, scale: str, quality_attrs: list, hard_constraints: list) -> list:
     """Derive assumptions from the classification evidence."""
     assumptions = [
@@ -265,6 +378,8 @@ def interpret_intent(intent: str) -> dict:
     criteria = generate_acceptance_criteria(intent, domain)
     unknowns = derive_unknowns(intent, domain, scale, quality_attrs)
     assumptions = derive_assumptions(intent, domain, scale, quality_attrs, hard_constraints)
+    complexity = classify_complexity(intent, domain, scale, quality_attrs,
+                                     hard_constraints, criteria)
 
     task = {
         "name": goal[:80],
@@ -272,6 +387,7 @@ def interpret_intent(intent: str) -> dict:
         "real_need": intent.strip(),
         "goal": goal,
         "scale": scale,
+        "complexity": complexity,
         "quality_attributes": quality_attrs,
         "hard_constraints": hard_constraints,
         "soft_constraints": soft_constraints,
@@ -317,6 +433,9 @@ def main():
         print(f"Task definition written to: {args.output}")
         print(f"  Domain: {task['domain']}")
         print(f"  Scale: {task['scale']}")
+        cx = task.get("complexity", {})
+        print(f"  Complexity: tier={cx.get('tier')} S={cx.get('scope')} "
+              f"C={cx.get('criticality')} N={cx.get('novelty')} K={cx.get('coupling')}")
         print(f"  Quality attributes: {task['quality_attributes']}")
         print(f"  Hard constraints: {len(task['hard_constraints'])}")
         print(f"  Acceptance criteria: {len(task['acceptance_criteria'])}")

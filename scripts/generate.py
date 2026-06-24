@@ -80,6 +80,79 @@ LAYER_ARTIFACTS = {
 # before deleting it (prevents accidental data loss via shutil.rmtree).
 HARNESS_MARKER = ".harness-generated"
 
+# ARTIFACT_GATE: 按复杂度因子 (S/C/N/K) + tier 谓词裁剪每层 artifact。
+# 第一性原理：每多一个 artifact 都付出上下文成本，应仅在因果因子需要时复制。
+# 未列出的文件默认 always（保守，避免意外丢失）。核心层 (context/memory/planning/
+# constraints/evolution/tools) 全部 always，仅可选层 (verification/feedback/
+# security/observability) 按因子裁剪。最小可行 harness 边界在 gate 内保证。
+ARTIFACT_GATE = {
+    "verification": {
+        "self-check.py":            "always",              # 最小边界：无验证非 harness
+        "consistency-check.py":     "K>=3",                # 高耦合才需一致性检查
+        "security-guardrails.yaml": "C>=3",                # 高代价才需安全护栏
+        "anti-mock-check.py":       "C>=3 or N>=3",        # 高代价或高新颖才需反 mock
+        "quality-gate.py":          "C>=3",                # 高代价才需质量门
+    },
+    "observability": {
+        "tracing.yaml":             "tier!='minimal'",
+        "metrics-dashboard.yaml":   "tier!='minimal'",
+        "session-replay.yaml":      "tier=='full'",
+        "versioning.yaml":          "always",
+    },
+    "feedback": {
+        "error-capture.py":         "always",
+        "retry-config.yaml":        "always",
+        "mistake-to-constraint.py": "tier!='minimal'",       # minimal 不做 mistake→constraint 复利
+        "human-interface.yaml":     "C>=4",                # 仅高代价才需人工 gate
+    },
+    "security": {
+        "sandbox-config.yaml":      "tier!='minimal'",
+        "encryption-rules.yaml":    "C>=3",
+        "audit-log.yaml":           "C>=4",
+    },
+}
+
+# 默认复杂度（向后兼容：旧 task.yaml 无 complexity 字段时用此值，≈ 当前全量复制行为）
+DEFAULT_COMPLEXITY = {"scope": 3, "criticality": 3, "novelty": 3, "coupling": 3, "tier": "standard"}
+
+
+def compute_profile(task: dict) -> dict:
+    """从 task 提取复杂度 profile，缺省回退 DEFAULT_COMPLEXITY（向后兼容）。"""
+    cx = task.get("complexity") or {}
+    profile = {
+        "tier": cx.get("tier", DEFAULT_COMPLEXITY["tier"]),
+        "scope": cx.get("scope", DEFAULT_COMPLEXITY["scope"]),
+        "criticality": cx.get("criticality", DEFAULT_COMPLEXITY["criticality"]),
+        "novelty": cx.get("novelty", DEFAULT_COMPLEXITY["novelty"]),
+        "coupling": cx.get("coupling", DEFAULT_COMPLEXITY["coupling"]),
+    }
+    return profile
+
+
+def _eval_gate(predicate: str, profile: dict) -> bool:
+    """安全评估 ARTIFACT_GATE 谓词。谓词是代码内常量（非用户输入），故 eval 可接受。"""
+    if predicate == "always":
+        return True
+    env = {
+        "tier": profile["tier"],
+        "S": profile["scope"],
+        "C": profile["criticality"],
+        "N": profile["novelty"],
+        "K": profile["coupling"],
+    }
+    try:
+        return bool(eval(predicate, {"__builtins__": {}}, env))
+    except Exception:
+        return True  # 谓词解析失败默认复制（保守，避免意外丢失 artifact）
+
+
+def should_copy_artifact(layer: str, filename: str, profile: dict) -> bool:
+    """判断某 seed artifact 是否应按 profile 复制。未列入 gate 的默认 always。"""
+    gate = ARTIFACT_GATE.get(layer, {})
+    if filename not in gate:
+        return True
+    return _eval_gate(gate[filename], profile)
+
 
 def _get_src_dirs(template_name: str) -> list:
     src_layouts = {
@@ -205,7 +278,12 @@ def load_template(template_name: str) -> dict:
     return {"path": template_file, "name": template_name, "parsed": parsed}
 
 
-def copy_seed_artifacts(output_dir: Path, layer: str) -> list:
+def copy_seed_artifacts(output_dir: Path, layer: str, profile: dict = None) -> list:
+    """复制 seeds/<layer>/ 下的 artifact 到 output_dir/<layer>/。
+
+    若提供 profile，则按 ARTIFACT_GATE 谓词过滤（自适应规模）。
+    profile=None 时全量复制（向后兼容）。
+    """
     seed_dir = SEEDS_DIR / layer
     layer_dir = output_dir / layer
     layer_dir.mkdir(parents=True, exist_ok=True)
@@ -213,6 +291,10 @@ def copy_seed_artifacts(output_dir: Path, layer: str) -> list:
 
     if seed_dir.exists():
         for item in seed_dir.iterdir():
+            # profile 过滤：仅作用于文件，子目录（如 tools/adapters/）默认全量复制
+            if profile is not None and item.is_file():
+                if not should_copy_artifact(layer, item.name, profile):
+                    continue
             dest = layer_dir / item.name
             if item.is_file():
                 shutil.copy2(item, dest)
@@ -235,12 +317,39 @@ def customize_knowledge_index(output_dir: Path, template: dict) -> None:
         data = yaml.safe_load(f) or {}
 
     template_name = template.get("name", "web-app")
+    # v2: 每条映射为 {description, tags} dict，支持 loader.py 多信号排序检索
     domain_mappings = {
-        "web-app": {"src/api/": "API endpoints and contracts", "src/components/": "UI components", "src/services/": "Business logic", "src/repositories/": "Data access"},
-        "api-service": {"src/routes/": "API route handlers", "src/services/": "Business logic layer", "src/repositories/": "Data access layer", "src/models/": "Data models and types", "schemas/": "API schema definitions"},
-        "automation": {"triggers/": "Event trigger definitions", "actions/": "Automation action handlers", "monitors/": "Health check monitors", "workflows/": "Automation workflow configs"},
-        "data-pipeline": {"schemas/": "Data schema definitions", "transforms/": "Data transformation logic", "quality/": "Data validation rules", "pipelines/": "Pipeline configurations"},
-        "content-system": {"templates/": "Content structure templates", "style-guide/": "Writing rules and style", "topics/": "Subject matter knowledge", "reviews/": "Content review records"},
+        "web-app": {
+            "src/api/": {"description": "API endpoints and contracts", "tags": ["api", "contract", "endpoint", "route"]},
+            "src/components/": {"description": "UI components", "tags": ["ui", "component", "frontend", "view"]},
+            "src/services/": {"description": "Business logic", "tags": ["service", "business", "logic"]},
+            "src/repositories/": {"description": "Data access", "tags": ["data", "persistence", "db", "repository"]},
+        },
+        "api-service": {
+            "src/routes/": {"description": "API route handlers", "tags": ["api", "route", "endpoint", "handler"]},
+            "src/services/": {"description": "Business logic layer", "tags": ["service", "business", "logic"]},
+            "src/repositories/": {"description": "Data access layer", "tags": ["data", "persistence", "db", "repository"]},
+            "src/models/": {"description": "Data models and types", "tags": ["model", "type", "entity", "dto"]},
+            "schemas/": {"description": "API schema definitions", "tags": ["schema", "definition", "validation"]},
+        },
+        "automation": {
+            "triggers/": {"description": "Event trigger definitions", "tags": ["trigger", "event", "automation"]},
+            "actions/": {"description": "Automation action handlers", "tags": ["action", "handler", "automation"]},
+            "monitors/": {"description": "Health check monitors", "tags": ["monitor", "health", "check"]},
+            "workflows/": {"description": "Automation workflow configs", "tags": ["workflow", "config", "automation"]},
+        },
+        "data-pipeline": {
+            "schemas/": {"description": "Data schema definitions", "tags": ["schema", "definition", "data"]},
+            "transforms/": {"description": "Data transformation logic", "tags": ["transform", "data", "logic"]},
+            "quality/": {"description": "Data validation rules", "tags": ["quality", "validation", "rule"]},
+            "pipelines/": {"description": "Pipeline configurations", "tags": ["pipeline", "config", "etl"]},
+        },
+        "content-system": {
+            "templates/": {"description": "Content structure templates", "tags": ["template", "content", "structure"]},
+            "style-guide/": {"description": "Writing rules and style", "tags": ["style", "guide", "rule", "writing"]},
+            "topics/": {"description": "Subject matter knowledge", "tags": ["topic", "knowledge", "domain"]},
+            "reviews/": {"description": "Content review records", "tags": ["review", "content", "qa"]},
+        },
     }
     if template_name in domain_mappings:
         data["mappings"] = domain_mappings[template_name]
@@ -553,6 +662,115 @@ def generate_session_state(output_dir: Path, task: dict) -> None:
     (long_term_dir / ".gitkeep").write_text("", encoding="utf-8")
 
 
+def preseed_long_term(output_dir: Path, profile: dict, template_name: str) -> None:
+    """按 Novelty 因子差异化预填 memory/long-term/（问题2核心落地）。
+
+    第一性原理：KB 质量必须等于新颖性曲面（N 因子）。
+      - N<=2（熟悉）: 不预填（.gitkeep 保留，多了是上下文污染）
+      - N==3（较新）: 预填 domain-advancements 的 Solid 阶段 innovations
+      - N>=4（陌生）: 预填 Solid + Advanced，并从 trigger 字段生成 anti-patterns
+    """
+    novelty = profile.get("novelty", 3)
+    if novelty < 3:
+        return  # 熟悉领域不预填
+
+    # 定位 domain-advancements 源文件
+    adv_file = SEEDS_DIR / "evolution" / f"domain-advancements-{template_name}.yaml"
+    if not adv_file.exists():
+        adv_file = SEEDS_DIR / "evolution" / "domain-advancements.yaml"
+    if not adv_file.exists():
+        return
+
+    with open(adv_file, "r", encoding="utf-8") as f:
+        adv_data = yaml.safe_load(f) or {}
+    stages = adv_data.get("stages", []) or []
+
+    # 按 N 收集对应阶段的 innovations
+    # N==3 → Solid；N==4 → Solid+Advanced；N==5 → Solid+Advanced+Excellent
+    stage_names_by_n = {
+        3: ["Solid"],
+        4: ["Solid", "Advanced"],
+        5: ["Solid", "Advanced", "Excellent"],
+    }
+    target_stages = stage_names_by_n.get(novelty, ["Solid", "Advanced"])
+
+    known_patterns = []
+    anti_patterns = []
+    for stage in stages:
+        stage_name = stage.get("name", "")
+        if stage_name not in target_stages:
+            continue
+        for inn in stage.get("innovations", []) or []:
+            known_patterns.append({
+                "id": inn.get("id"),
+                "name": inn.get("name"),
+                "description": inn.get("description"),
+                "category": inn.get("category"),
+                "effort": inn.get("effort"),
+                "impact": inn.get("impact"),
+                "source_stage": stage_name,
+            })
+            # trigger 字段描述"何时需要此创新"，转化为"缺失时的反模式"
+            trigger = inn.get("trigger")
+            if trigger:
+                anti_patterns.append({
+                    "id": inn.get("id"),
+                    "anti_pattern": f"Missing: {inn.get('name')}",
+                    "trigger": trigger,
+                    "source_stage": stage_name,
+                })
+
+    long_term_dir = output_dir / "memory" / "long-term"
+    long_term_dir.mkdir(parents=True, exist_ok=True)
+
+    if known_patterns:
+        with open(long_term_dir / "known-patterns.yaml", "w", encoding="utf-8") as f:
+            yaml.dump({"version": 1, "novelty_at_seed": novelty,
+                       "patterns": known_patterns}, f, default_flow_style=False, allow_unicode=True)
+    if anti_patterns:
+        with open(long_term_dir / "anti-patterns.yaml", "w", encoding="utf-8") as f:
+            yaml.dump({"version": 1, "novelty_at_seed": novelty,
+                       "anti_patterns": anti_patterns}, f, default_flow_style=False, allow_unicode=True)
+
+
+def write_harness_profile(output_dir: Path, task: dict, profile: dict,
+                          active_artifacts: list) -> None:
+    """写 harness-profile.yaml：运行时契约 + 向后兼容标记（问题1与问题2的统一锚点）。
+
+    结构生成时定（tier/factors/active_artifacts/context_budget），
+    激活运行时调（phase-activation 读此文件），EVOLVE 在此基础上复利。
+    """
+    import math
+    S, C, N, K = profile["scope"], profile["criticality"], profile["novelty"], profile["coupling"]
+    # 上下文预算公式：base 500 + S/N 增量
+    context_budget = 500 + 100 * max(0, S - 2) + 150 * max(0, N - 2)
+    # agent 拓扑估算（agent-factory 会写详细 topology，此处为概览）
+    agent_count = 1 + math.ceil(S / 2) + 1  # planner + executors + verifier
+    if C >= 4:
+        agent_count += 1
+    if K >= 3:
+        agent_count += 1
+    if N >= 3:
+        agent_count += 1
+
+    active_layers = sorted({str(a).split("/")[0] for a in active_artifacts})
+    profile_data = {
+        "version": 1,
+        "generated_at": datetime.now().isoformat(),
+        "tier": profile["tier"],
+        "factors": {
+            "scope": S, "criticality": C, "novelty": N, "coupling": K,
+        },
+        "active_layers": active_layers,
+        "active_artifacts": [str(a) for a in active_artifacts],
+        "context_budget": context_budget,
+        "agent_topology": {"estimated_count": agent_count},
+        "note": "Structure fixed at generation; activation tuned at runtime via phase-activation.",
+    }
+    with open(output_dir / "harness-profile.yaml", "w", encoding="utf-8") as f:
+        yaml.dump(profile_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+
 def generate_evolution_genome(output_dir: Path, task: dict, template: dict) -> None:
     parsed = template.get("parsed", {})
     domain_constraints = parsed.get("constraints", [])
@@ -649,13 +867,17 @@ def generate_format_validators(output_dir: Path) -> None:
         json.dump(config_schema, f, indent=2, ensure_ascii=False)
 
 
-def verify_completeness(output_dir: Path) -> dict:
+def verify_completeness(output_dir: Path, profile: dict = None) -> dict:
+    """检查每层 artifact 是否齐全。profile 提供时，被 gate 裁剪的文件不计为 missing。"""
     results = {}
     for layer, artifacts in LAYER_ARTIFACTS.items():
         layer_dir = output_dir / layer
         found = []
         missing = []
         for artifact in artifacts:
+            # 被 gate 裁剪的文件不计为 missing（自适应规模，非缺陷）
+            if profile is not None and not should_copy_artifact(layer, artifact, profile):
+                continue
             if (layer_dir / artifact).exists():
                 found.append(artifact)
             else:
@@ -696,9 +918,12 @@ def print_verification(results: dict) -> bool:
 
 def generate(task: dict, template_name: str, output_dir: Path) -> None:
     template = load_template(template_name)
+    profile = compute_profile(task)
     print(f"Generating harness project: {output_dir}")
     print(f"Task: {task.get('name', 'unnamed')}")
     print(f"Template: {template_name}")
+    print(f"Complexity: tier={profile['tier']} S={profile['scope']} "
+          f"C={profile['criticality']} N={profile['novelty']} K={profile['coupling']}")
     print(f"Domain constraints from template: {len(template.get('parsed', {}).get('constraints', []))}")
     print(f"Domain workflows from template: {len(template.get('parsed', {}).get('workflows', []))}")
 
@@ -742,10 +967,12 @@ def generate(task: dict, template_name: str, output_dir: Path) -> None:
     if evolve_script.exists():
         shutil.copy2(evolve_script, scripts_dir / "evolve.py")
 
+    all_copied = []
     for layer in LAYER_DIRS:
         layer_dir = output_dir / layer
         layer_dir.mkdir(parents=True, exist_ok=True)
-        copied = copy_seed_artifacts(output_dir, layer)
+        copied = copy_seed_artifacts(output_dir, layer, profile)
+        all_copied.extend(copied)
         if copied:
             print(f"  Copied {len(copied)} seed artifacts to {layer}/")
 
@@ -757,8 +984,10 @@ def generate(task: dict, template_name: str, output_dir: Path) -> None:
 
     generate_agents_md(output_dir, task, template)
     generate_session_state(output_dir, task)
+    preseed_long_term(output_dir, profile, template_name)
     generate_evolution_genome(output_dir, task, template)
     generate_format_validators(output_dir)
+    write_harness_profile(output_dir, task, profile, all_copied)
 
     meta_framework = HARNESS_ROOT / "evolution" / "framework.md"
     if meta_framework.exists():
@@ -781,7 +1010,7 @@ def generate(task: dict, template_name: str, output_dir: Path) -> None:
     elif generic_adv.exists():
         shutil.copy2(generic_adv, evo_output / "domain-advancements.yaml")
 
-    results = verify_completeness(output_dir)
+    results = verify_completeness(output_dir, profile)
     all_complete = print_verification(results)
 
     generation_log = {

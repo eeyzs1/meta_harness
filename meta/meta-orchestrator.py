@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-META-ORCHESTRATOR v2.4: Drives the meta-harness pipeline with context-loss resilience.
+META-ORCHESTRATOR v2.5: Drives the meta-harness pipeline with context-loss resilience.
 
 This is THE entry point for the meta-harness. It drives the pipeline:
   INTERPRET -> GENERATE -> FACTORY -> PROVE -> JUDGE -> EVOLVE
 
-Key features (v2.4):
+Key features (v2.5):
 - Stateful pipeline tracking (reads/writes meta/pipeline-state.yaml)
 - PHASE_BRIEF.md: ultra-compact resume file survives context compression
 - Acceptance criteria anchoring: prevents task drift across turns
@@ -438,7 +438,7 @@ def save_state(state: dict) -> None:
 
 def _default_state() -> dict:
     return {
-        "pipeline_version": "2.4.0",
+        "pipeline_version": "2.5.0",
         "current_phase": "INTERPRET",
         "phase_order": [p["id"] for p in PIPELINE_PHASES],
         "completed_phases": [],
@@ -761,7 +761,7 @@ def reset_pipeline() -> dict:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Meta-Orchestrator v2.4 -- Drives the meta-harness pipeline",
+        description="Meta-Orchestrator v2.5 -- Drives the meta-harness pipeline",
         epilog="Context-loss resilient. PHASE_BRIEF.md survives compression.",
     )
     parser.add_argument("--status", action="store_true", help="Show current pipeline status")

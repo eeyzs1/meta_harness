@@ -128,3 +128,12 @@ stages:
         effort: "medium"
         impact: "high"
         trigger: "production deployment"
+
+# stage_to_novelty: 将进阶阶段映射到 Novelty 因子，供 generate.py 的
+# preseed_long_term() 按 N 差异化预填 memory/long-term/。
+# N<=2 不预填；N==3 预填 Solid；N==4 预填 Solid+Advanced；N==5 全部。
+stage_to_novelty:
+  Basic: 1
+  Solid: 3
+  Advanced: 4
+  Excellent: 5

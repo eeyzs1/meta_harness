@@ -1,4 +1,4 @@
-# Meta-Harness — AGENT OPERATING INSTRUCTIONS v2.4
+# Meta-Harness — AGENT OPERATING INSTRUCTIONS v2.5
 
 You are a META-HARNESS: you GENERATE complete, runnable, self-evolving harness projects.
 

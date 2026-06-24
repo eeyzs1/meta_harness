@@ -4,6 +4,44 @@ All notable changes to Meta-Harness are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.5.0] — 2026-06-24
+
+### Added
+- **S/C/N/K 复杂度模型**: `scripts/interpret.py` 新增 `classify_complexity()`，
+  从 intent 推导四个正交因子（Scope/Criticality/Novelty/Coupling，每因子 1-5）
+  与 tier（minimal/standard/full），替代伪概念 "difficulty"。写入 `task.complexity`。
+- **ARTIFACT_GATE**: `scripts/generate.py` 新增按因子谓词裁剪 artifact 的机制
+  （verification/observability/feedback/security 四层），`copy_seed_artifacts()`
+  按 profile 过滤；`write_harness_profile()` 写运行时契约 `harness-profile.yaml`。
+- **preseed_long_term**: `scripts/generate.py` 按 Novelty 因子差异化预填
+  `memory/long-term/`（N≥3 预填 `known-patterns.yaml` + `anti-patterns.yaml`，
+  来自 `domain-advancements.yaml` 的 `stage_to_novelty` 映射）。
+- **知识库四职能模型**: `seeds/context/loader.py` 重写为 inject / retrieve /
+  active_constraints / recall 四职能。retrieve 用三信号加权排序
+  （path-prefix +3 / domain-tag +2 / keyword overlap +1）替代布尔匹配，
+  含停用词过滤。
+- **prototypes 角色原型**: `seeds/planning/sub-agent-dispatch.yaml` v2 格式，
+  6 角色原型带 `condition` / `count` 表达式，按 S/C/N/K 实例化。
+- **agent-factory 自适应拓扑**: `scripts/agent-factory.py` 新增 `derive_roles()`
+  按 prototype 实例化 + `compute_context_budget()` 按 S/N 推导上下文预算。
+- **knowledge-index v2**: `seeds/context/knowledge-index.yaml` 每条 mapping
+  带 description + 受控词表 tags。
+- **stage_to_novelty 映射**: `seeds/evolution/domain-advancements.yaml` 追加
+  进阶阶段到 Novelty 因子的映射（Basic=1/Solid=3/Advanced=4/Excellent=5）。
+
+### Changed
+- 生成 harness 的大小现在按任务复杂度自适应（minimal/standard/full 三档），
+  替代原固定全量复制。
+- 高 Novelty 项目自带预填知识库，替代原空 `memory/long-term/`。
+- `meta/harness-generator.md` 文档更新：替换 CONCEPTUAL 概念为已实现的
+  S/C/N/K 模型 + ARTIFACT_GATE。
+
+### Backward Compatible
+- 旧 `task.yaml` 无 `complexity` 字段时默认 `{S:3,C:3,N:3,K:3,standard}`，
+  复制行为 ≈ 原全量复制。
+- `loader.py` 自动包装 v1 字符串值为 v2 dict。
+- `sub-agent-dispatch.yaml` 无 `prototypes` 时回退 `roles`。
+
 ## [2.4.0] — 2026-06-22
 
 ### Added
