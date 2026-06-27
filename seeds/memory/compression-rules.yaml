@@ -2,11 +2,11 @@ version: 1
 description: Memory compression rules — what to keep, summarize, or forget
 rules:
   keep_verbatim:
-    - constraints/**
-    - decisions/**
-    - architecture-rules.yaml
-    - genome.yaml
-    reason: "Core rules and decisions must never be compressed"
+    - "constraints/**"
+    - "decisions/**"
+    - "architecture-rules.yaml"
+    - "genome.yaml"
+  keep_verbatim_reason: "Core rules and decisions must never be compressed"
 
   summarize:
     - pattern: "execution-logs/**"

@@ -32,7 +32,7 @@ The pipeline is driven by `meta/meta-orchestrator.py`. This script:
 | Phase | Load |
 |-------|------|
 | INTERPRET | `meta/interpreter.md` + `meta/phase-loader.md` + `seeds/planning/planner-engine.md` |
-| GENERATE | `meta/harness-generator.md` + `seeds/planning/project-yaml-template.yaml` |
+| GENERATE | `meta/harness-generator.md` (v2 flow: `scripts/scaffold.py` → `meta/harness-author.md` → `scripts/validate-harness.py`) + `seeds/planning/project-yaml-template.yaml` |
 | FACTORY | `meta/agent-factory.md` |
 | PROVE | `scripts/verify-generation.py` + `seeds/verification/auditor-engine.md` |
 | JUDGE | `seeds/guard.py` + `seeds/orchestrator.py` |
@@ -60,6 +60,17 @@ This does 5 things (v2.4+):
 
 If a phase script fails, the error is recorded but the pipeline is NOT blocked
 — review the output, fix the issue, and re-run the script manually if needed.
+
+**EXCEPTION — GENERATE pre-advance gate (v2.5+):** The GENERATE → FACTORY boundary
+is a BLOCKING gate. `--advance` from GENERATE runs `scripts/validate-harness.py`
+first; if it does not PASS, `--advance` is REFUSED and FACTORY does not start.
+This prevents FACTORY from running on a half-scaffolded harness (mock slots,
+missing work-units, broken DAG refs). Fix the slot fills flagged by the
+validator, re-run `validate-harness.py` until it PASSes, then re-run `--advance`.
+The GENERATE phase is 3 steps: scaffold (auto) → LLM-authored slots (manual) →
+validate (the gate). Only INTERPRET (needs user-confirmed criteria) and
+GENERATE (needs validate-harness PASS) are blocking gates; all other phase
+boundaries remain best-effort as described above.
 
 **To skip auto-run** (restore pre-v2.4 manual behavior):
 ```

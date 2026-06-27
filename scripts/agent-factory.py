@@ -169,13 +169,19 @@ def derive_roles(dispatch: dict, profile: dict) -> list:
         if isinstance(count, str):
             count = _eval_factor_expr(count, profile)
         count = max(1, int(count))
+        # 保留 LLM 在 prototype 里声明的 boundaries / requires_human_review
+        # （不要丢给硬编码默认——dispatcher 与 task card 需要这些）
+        boundaries = dict(proto.get("boundaries") or {})
         for i in range(count):
             name = proto_name if count == 1 else f"{proto_name}-{i}"
             roles.append({
                 "name": name,
+                "prototype_name": proto_name,  # 用于匹配 work-units.assigned_to
                 "responsibilities": list(proto.get("responsibilities", []) or []),
                 "receives": list(proto.get("receives", []) or []),
                 "produces": list(proto.get("produces", []) or []),
+                "boundaries": dict(boundaries),  # LLM-authored
+                "requires_human_review": bool(proto.get("requires_human_review", False)),
             })
     return roles
 
@@ -255,6 +261,9 @@ def assign_criteria(roles, acceptance_criteria):
     One executor → it gets all criteria. Multiple executors → distribute by
     keyword matching between criteria text and role responsibilities. If no
     executor is detected, fall back to assigning all criteria to every role.
+
+    Deprecated when work-units.yaml exists——优先用 derive_criteria_from_work_units
+    （LLM 显式声明的 traces_to 比关键词匹配可靠）。
     """
     assignments = {role.get("name", ""): [] for role in roles}
     if not acceptance_criteria:
@@ -295,6 +304,131 @@ def assign_criteria(roles, acceptance_criteria):
     return assignments
 
 
+def derive_criteria_from_work_units(roles, acceptance_criteria, project_root):
+    """从 work-units.yaml 的 traces_to 派生每个 role 的 assigned_criteria。
+
+    第一性原理：哪些 AC 分给哪个 agent 是语义决策 → LLM 在 work-units.yaml
+    通过 traces_to 显式声明；agent-factory 只读，不推断。
+
+    匹配规则：role.prototype_name == work_unit.assigned_to 时，把
+    work_unit.traces_to 里的 AC id 映射到 task.acceptance_criteria 的 criterion。
+
+    返回 (assignments, source)。source="work-units.yaml" 或 "fallback:keyword"。
+    """
+    import yaml as _yaml
+    from pathlib import Path as _Path
+
+    wu_file = project_root / "planning" / "work-units.yaml"
+    if not wu_file.exists():
+        # 没有 work-units.yaml → 调用方回退关键词匹配
+        return None, "fallback:keyword"
+
+    with open(wu_file, "r", encoding="utf-8") as f:
+        wu_data = _yaml.safe_load(f) or {}
+    units = wu_data.get("work_units") or wu_data.get("units") or []
+    if not units:
+        return None, "fallback:keyword"
+
+    # 建 AC id → criterion 文本 的索引
+    # task.acceptance_criteria 可能是字符串列表或 dict 列表（含 id/criterion 字段）
+    ac_by_id = {}
+    ac_list = []
+    for i, c in enumerate(acceptance_criteria):
+        if isinstance(c, dict):
+            cid = c.get("id") or c.get("ac_id") or f"AC{i+1}"
+            text = c.get("criterion") or c.get("text") or c.get("description") or ""
+        else:
+            cid = f"AC{i+1}"
+            text = str(c)
+        ac_by_id[cid] = c
+        ac_list.append((cid, c))
+
+    # 收集每个 prototype 的 traces_to AC 集合
+    proto_to_ac_ids = {}
+    invalid_traces = []  # traces_to 引用了非 AC id（如误用 AR id）的告警
+    valid_ac_ids = set(ac_by_id.keys())
+    for u in units:
+        if not isinstance(u, dict):
+            continue
+        proto = u.get("assigned_to")
+        if not proto:
+            continue
+        traces = u.get("traces_to") or []
+        # 兼容字符串与列表
+        if isinstance(traces, str):
+            traces = [traces]
+        # 校验 traces_to 引用合法性：必须是 AC id（AC1..ACn）
+        for tid in traces:
+            if tid not in valid_ac_ids:
+                invalid_traces.append(
+                    f"  work_unit {u.get('id','?')} (assigned_to={proto}) "
+                    f"traces_to contains '{tid}' which is not a valid AC id "
+                    f"(valid: {sorted(valid_ac_ids) or 'none'}); "
+                    f"this trace will be silently dropped"
+                )
+        proto_to_ac_ids.setdefault(proto, set()).update(traces)
+
+    if invalid_traces:
+        print(f"WARNING: traces_to 引用了非 AC id（agent-factory.py 会静默丢弃）:")
+        for msg in invalid_traces:
+            print(msg)
+        print("  提示：traces_to 应填 AC id（如 AC1, AC2...），不是 AR id；")
+        print("        若 work_unit 实现架构约束但不直接 trace 到 AC，用空列表 []")
+
+    assignments = {role.get("name", ""): [] for role in roles}
+    for role in roles:
+        rname = role.get("name", "")
+        proto = role.get("prototype_name") or rname
+        ac_ids = proto_to_ac_ids.get(proto, set())
+        # 把 ac id 映射回原始 criterion 对象
+        for cid, c in ac_list:
+            if cid in ac_ids:
+                assignments[rname].append(c)
+
+    return assignments, "work-units.yaml"
+
+
+def derive_workflows_from_work_units(roles, project_root):
+    """从 work-units.yaml 的 workflow 字段派生每个 role 的 assigned_workflows。
+
+    同 derive_criteria_from_work_units 模式：workflow→role 是 LLM 在 work-units
+    显式声明的，agent-factory 不做关键词推断。
+
+    返回 (assignments, source)。source="work-units.yaml" 或 "fallback:keyword"。
+    """
+    import yaml as _yaml
+    from pathlib import Path as _Path
+
+    wu_file = project_root / "planning" / "work-units.yaml"
+    if not wu_file.exists():
+        return None, "fallback:keyword"
+
+    with open(wu_file, "r", encoding="utf-8") as f:
+        wu_data = _yaml.safe_load(f) or {}
+    units = wu_data.get("work_units") or wu_data.get("units") or []
+    if not units:
+        return None, "fallback:keyword"
+
+    proto_to_workflows = {}
+    for u in units:
+        if not isinstance(u, dict):
+            continue
+        proto = u.get("assigned_to")
+        wf = u.get("workflow")
+        if not proto or not wf:
+            continue
+        proto_to_workflows.setdefault(proto, set()).add(wf)
+
+    assignments = {role.get("name", ""): [] for role in roles}
+    for role in roles:
+        rname = role.get("name", "")
+        proto = role.get("prototype_name") or rname
+        wfs = proto_to_workflows.get(proto, set())
+        assignments[rname] = sorted(wfs)
+
+    return assignments, "work-units.yaml"
+
+
 def build_agent_config(role, assigned_workflows, assigned_criteria, context_budget=None):
     """Build the per-role agent configuration dict."""
     responsibilities = list(role.get("responsibilities", []) or [])
@@ -302,13 +436,24 @@ def build_agent_config(role, assigned_workflows, assigned_criteria, context_budg
     produces = list(role.get("produces", []) or [])
     name = role.get("name", "unknown")
 
+    # LLM-authored boundaries 优先；缺失时回退硬编码默认
+    proto_boundaries = role.get("boundaries") or {}
+    cannot = list(proto_boundaries.get("cannot") or DEFAULT_CANNOT)
+    proto_max_ctx = proto_boundaries.get("max_context_lines")
+    # prototype 显式声明 max_context_lines 时优先（LLM 知道该角色预算）；
+    # 否则回退 compute_context_budget(S,N) 或 DEFAULT
+    if proto_max_ctx is not None:
+        budget = int(proto_max_ctx)
+    elif context_budget is not None:
+        budget = context_budget
+    else:
+        budget = DEFAULT_MAX_CONTEXT_LINES
+    requires_human_review = bool(role.get("requires_human_review", False))
+
     role_desc = "; ".join(responsibilities) if responsibilities else f"{name} role"
 
     tools = [{"name": item, "access": "read"} for item in receives]
     tools += [{"name": item, "access": "write"} for item in produces]
-
-    # 上下文预算：由 compute_context_budget(S,N) 驱动，回退 DEFAULT_MAX_CONTEXT_LINES
-    budget = context_budget if context_budget is not None else DEFAULT_MAX_CONTEXT_LINES
 
     # Fresh list copies per field so PyYAML does not emit shared anchors/aliases
     # between scope and handoff (keeps the output flat and readable).
@@ -324,8 +469,9 @@ def build_agent_config(role, assigned_workflows, assigned_criteria, context_budg
                 "can_execute": list(DEFAULT_CAN_EXECUTE),
             },
             "boundaries": {
-                "cannot": list(DEFAULT_CANNOT),
+                "cannot": cannot,
                 "max_context_lines": budget,
+                "requires_human_review": requires_human_review,
             },
             "handoff": {
                 "input_format": list(receives),
@@ -454,7 +600,23 @@ def run_factory(project_root, dry_run):
     acceptance_criteria = task.get("acceptance_criteria", []) or []
 
     workflow_assignments = assign_workflows(roles, workflows)
-    criteria_assignments = assign_criteria(roles, acceptance_criteria)
+    # 优先用 work-units.yaml 的显式 workflow 字段派生（LLM 声明的，不推断）
+    wu_wf_result, wf_source = derive_workflows_from_work_units(roles, project_root)
+    if wu_wf_result is not None:
+        workflow_assignments = wu_wf_result
+        print(f"Workflow assignment: source=work-units.yaml (LLM-declared workflow field)")
+    else:
+        print(f"Workflow assignment: source=keyword-match (fallback, no work-units.yaml)")
+    # 优先用 work-units.yaml 的显式 traces_to 派生 criteria（LLM 声明的，不推断）
+    # 没有 work-units.yaml 才回退到关键词匹配
+    wu_result, criteria_source = derive_criteria_from_work_units(
+        roles, acceptance_criteria, project_root)
+    if wu_result is not None:
+        criteria_assignments = wu_result
+        print(f"Criteria assignment: source=work-units.yaml (LLM-declared traces_to)")
+    else:
+        criteria_assignments = assign_criteria(roles, acceptance_criteria)
+        print(f"Criteria assignment: source=keyword-match (fallback, no work-units.yaml)")
 
     configs = []
     for role in roles:

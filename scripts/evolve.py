@@ -214,6 +214,16 @@ def measure_fitness(genome: dict, evidence: dict) -> float:
     criteria_count = pipeline_state.get("criteria_count", 0)
     scores["goal_drift_rate"] = (verified_count / criteria_count) if criteria_count > 0 else 1.0
 
+    # safety_compliance_rate: 从 genome 的 immovable 约束（HC001-HC005 等）派生。
+    # violated = trigger_count > 0 的 immovable 约束数；rate = 1 - violated/total。
+    # 仅当 genome 声明了 safety_compliance_rate 权重且有 immovable 约束时才计算
+    # （向后兼容：没有 HC 约束的项目权重为 0，不影响 fitness）。
+    harness = genome.get("harness_genome", {})
+    hc_constraints = [c for c in harness.get("constraints", []) if c.get("immovable", False)]
+    if hc_constraints and "safety_compliance_rate" in weights:
+        violated = sum(1 for c in hc_constraints if c.get("trigger_count", 0) > 0)
+        scores["safety_compliance_rate"] = 1.0 - (violated / len(hc_constraints))
+
     fitness = sum(weights.get(k, 0) * v for k, v in scores.items())
     return round(fitness, 4)
 
@@ -256,7 +266,9 @@ def propose_mutations(genome: dict, evidence: dict, fitness: float) -> list:
         })
 
     if fitness > 0.8 and len(constraints) > 5:
-        untriggered = [c for c in constraints if c.get("trigger_count", 0) == 0]
+        # 跳过 immovable 约束（HC001-HC005 等不可移约束不应被 weaken）
+        untriggered = [c for c in constraints
+                       if c.get("trigger_count", 0) == 0 and not c.get("immovable", False)]
         if len(untriggered) > 2:
             mutations.append({
                 "type": "WEAKEN_CONSTRAINT",
@@ -272,6 +284,20 @@ def propose_mutations(genome: dict, evidence: dict, fitness: float) -> list:
 def check_safety(mutation: dict, genome: dict) -> bool:
     if mutation["type"] in ("REMOVE_CONSTRAINT", "WEAKEN_CONSTRAINT"):
         target = mutation.get("target", "")
+        # 提取 target 里的 constraint id（如 harness_genome.constraints[HC001] → HC001）
+        target_id = ""
+        if "[" in target and "]" in target:
+            target_id = target[target.find("[") + 1:target.find("]")]
+
+        # 优先检查 immovable 标志（显式声明，比字符串匹配更可靠）。
+        # HC001-HC005 等不可移约束即使 trigger_count=0 也不可 weaken/remove。
+        harness = genome.get("harness_genome", {})
+        for c in harness.get("constraints", []):
+            if c.get("id") == target_id and c.get("immovable", False):
+                print(f"  ❌ SAFETY: Cannot remove/weaken immovable constraint {target_id}")
+                return False
+
+        # 保留旧字符串匹配作为兜底（针对未用 immovable 标记的项目）
         if "verification" in target.lower():
             print(f"  ❌ SAFETY: Cannot remove/weaken verification constraint")
             return False
@@ -308,6 +334,8 @@ def apply_mutation(genome: dict, mutation: dict) -> dict:
     elif mutation["type"] == "STRENGTHEN_CONSTRAINT":
         # Add a concrete enforcement condition rather than a text label.
         for c in constraints:
+            if c.get("immovable", False):
+                continue  # 不可移约束（HC001-HC005）不修改
             if c.get("trigger_count", 0) > 0:
                 if "must be verified" not in c["rule"].lower():
                     c["rule"] = c["rule"] + " — must be verified by orchestrator.py --verify before proceeding"

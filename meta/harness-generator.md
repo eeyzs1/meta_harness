@@ -91,18 +91,89 @@ A full project in `generated/[project-name]/` that includes:
 - seeds/evolution/log.yaml — evolution history (generation seed)
 - Evolution triggers: periodic, reactive, emergency, adaptive
 
-## Generation Steps
+## Architecture (v2 — LLM-driven scaffolding)
 
-1. **Read task definition** from interpreter output（含 `complexity` 字段：S/C/N/K + tier）
-2. **Select base template** from `templates/` as reference (NOT as starting point)
-3. **Compute complexity profile** via `compute_profile(task)` — 缺省回退 `{S:3,C:3,N:3,K:3,standard}`（向后兼容旧 task.yaml）
-4. **For each layer**: 按 `ARTIFACT_GATE` 谓词过滤 seed artifacts，仅复制因子需要的（核心层 always；可选层 verification/observability/feedback/security 按 S/C/N/K/tier 裁剪）。`copy_seed_artifacts(output_dir, layer, profile)` 实现
-5. **Wire layers together**: ensure each layer references the others correctly
-6. **Generate entry points**: AGENTS.md, CLAUDE.md, main execution scripts
-7. **Preseed long-term memory** by Novelty — `preseed_long_term()`：N≤2 不预填 / N==3 Solid 阶段 / N≥4 Solid+Advanced 阶段（输出 known-patterns.yaml [+ anti-patterns.yaml]）
-8. **Generate evolution system**: adapted to the task's specific metrics
-9. **Write harness-profile.yaml** — `write_harness_profile()`：运行时契约（tier/factors/active_layers/active_artifacts/context_budget/agent_topology）
-10. **Verify completeness**: `verify_completeness(output_dir, profile)` — 被 gate 裁剪的文件不计为 missing；最小可行 harness 边界（6 核心层 + agent≥3 + self-check.py + evolution 三件套）必在
+> **本节是 GENERATE 阶段的当前实现（v2）。**
+> v1 用单一脚本 `scripts/generate.py` 把所有内容（包括 domain 特化）都硬编码进脚本。
+> v2 把工作切成三类：**脚本做确定性的事 / LLM 做语义分析 / 校验器守门**。
+> 旧的 `generate.py` 仍保留作向后兼容与对照基线，但新项目应使用 v2 流程。
+
+### 三类工作的分工（第一性原理）
+
+| 工作类型 | 谁做 | 为什么 |
+|---------|------|--------|
+| 建目录 / 复制通用原语 / 写 manifest / 写 profile | 脚本（`scripts/scaffold.py`） | 确定性、与项目语义无关、可校验 |
+| ARTIFACT_GATE 按 S/C/N/K 裁剪可选层 slot | 脚本（`scaffold.py`） | 由标量因子推导，是结构裁剪 |
+| Slot 内容的项目特定改写 | LLM（按 `meta/harness-author.md` 指令） | domain 分析、约束合成是语义任务，LLM 远胜过脚本里的硬编码 dict |
+| 校验：结构完整 / slot 已填充 / 反 mock / AC 可追溯 / 引用一致 | 脚本（`scripts/validate-harness.py`） | 确定性检查，必须可重复 |
+
+### v2 Generation Steps（3 阶段）
+
+**阶段 1：Scaffold（脚本，确定性）**
+
+```
+python scripts/scaffold.py --task <task.yaml> --output generated/<project>
+```
+
+`scripts/scaffold.py` 的 `scaffold(task, output_dir)` 执行：
+
+1. 读 task.yaml（含 `complexity` 字段：S/C/N/K + tier，缺失回退 `{S:3,C:3,N:3,K:3,standard}`）
+2. 计算 profile（tier / factors）
+3. 建所有层目录
+4. 复制 `UNIVERSAL_PRIMITIVES`（loader.py / self-check.py / anti-mock-check.py / quality-gate.py / guard.py / orchestrator.py / evolution 三件套等）—— 原样字节复制，**这些是项目无关的执行原语**
+5. 按 `ARTIFACT_GATE` 谓词过滤可选层 slot（verification/security/observability/feedback），核心层 slot 全保留
+6. 对每个保留的 LLM slot：复制 seed 基线到目标位置，计算 `baseline_hash = md5(基线内容)` 写入 manifest
+7. 写 `harness-scaffold.yaml` manifest：列每个 slot 的 `(layer, file, baseline_hash, guidance)`
+8. 写 `harness-profile.yaml`：tier/factors/active_layers/active_artifacts/context_budget/agent_topology
+9. 不含任何 `if template == "web-app"` 风格的硬编码——脚本不知道也不需要知道 domain
+
+**阶段 2：LLM Author（语义层）**
+
+LLM 读 `meta/harness-author.md`，对 `harness-scaffold.yaml` 列出的每个 slot：
+
+1. 读 task.yaml 建立项目心智模型（domain / hard_constraints / acceptance_criteria / real_need）
+2. 读 slot 的 seed 基线（理解结构与 schema）
+3. 按 slot 的 `guidance` 字段 + harness-author.md 的 per-slot 填充规范，改写出项目特定内容
+4. 自检：每个改写引用了 task 里真实的组件名 / 约束 / AC 编号
+
+`baseline_hash` 机制保证：LLM 改过 → 当前哈希 != baseline_hash；未改 → 校验失败。
+**这是 v2 的核心反 mock 防线**：不是检查"有内容"，而是检查"内容确实被 LLM 改写并适配到本项目"。
+
+**阶段 3：Validate（脚本，守门）**
+
+```
+python scripts/validate-harness.py generated/<project>
+```
+
+`scripts/validate-harness.py` 6 项校验（退出码 0 = PASS，1 = FAIL）：
+
+1. **结构完整**：必填层在、通用原语在、evolution 三件套在、anti-mock 在
+2. **Slot 已填充**：每个 LLM slot 的当前哈希 != baseline_hash（LLM 真的改过）
+3. **YAML 语法合法**：每个 slot 可解析、非空
+4. **AC 可追溯**：task 的每条 `acceptance_criteria` 在某 verification slot 里有对应验证手段（关键词启发式）
+5. **反 mock**：扫描 enriched slot，无 `mock_/fake_/stub_/simulated return/# TODO/# placeholder/example_only` 模式
+6. **引用一致性**：`constraints/architecture-rules.yaml` 的 `dependency_direction` 不再是 web-app 默认（frontend/api/repository）—— 证明 LLM 确实按本项目改写了
+
+### v2 解决的 v1 局限
+
+| v1 局限 | v2 解法 |
+|--------|--------|
+| `generate.py` 用 `template_name` 字符串分桶，桶内无项目差异 | scaffold 不知道 domain；LLM 按每个 task 实例改写 |
+| `customize_*` 函数里硬编码 5 个 domain 的 dict（web-app/api-service/automation/data-pipeline/content-system） | 不存在硬编码 dict；LLM 在任意 domain 上都能改写 |
+| 5 桶之外回退 `web-app`（`generate.py:229` 的 `domain_map.get(domain, "web-app")`） | scaffold 不分桶，所有 domain 一视同仁 |
+| S/C/N/K 标量只驱动 ARTIFACT_GATE 谓词，丢失了语义 | 仍然驱动 ARTIFACT_GATE（结构裁剪），语义由 LLM 提供 |
+| 项目级差异（同一 domain 不同项目）无法表达 | LLM 按 task.yaml 的 hard_constraints / acceptance_criteria 实例化 |
+
+### 验证基线
+
+工业控制 task（domain=`industrial_control`，旧 5 桶之外）的 v2 流程验证证据：
+
+- `tests/task-industrial-control.yaml` — task 测试用例
+- `generated/industrial-control/harness-scaffold.yaml` — scaffold manifest（24 LLM slots）
+- `validate-harness.py` 输出：**24/24 slots enriched，6/6 AC 可追溯，0 mock patterns，PASS**
+- 对照：旧 `generate.py` 同一 task → `Template: web-app`（silent fallback），`architecture-rules.yaml` 仍是 `frontend→api→service→repo→DB`，`security-guardrails.yaml` 仍是 `email/phone/ssn` masking
+
+
 
 ## Complexity-Driven Adaptive Generation (S/C/N/K + ARTIFACT_GATE)
 

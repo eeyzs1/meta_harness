@@ -6,6 +6,13 @@ description: >-
 
 # 角色原型模板：agent-factory 按 S/C/N/K 因子实例化
 # count 为公式字符串（agent-factory 求值）或整数；condition 为门控谓词
+#
+# boundaries.cannot / boundaries.max_context_lines / requires_human_review
+# 是硬约束字段——agent-factory 保留它们派生 task card 的 context firewall。
+# LLM 填项目特定 sub-agent-dispatch.yaml 时必须为每个 prototype 声明这 3 项，
+# 否则 dispatcher 会落到 DEFAULT_CANNOT / DEFAULT_MAX_CONTEXT_LINES，
+# 违背"项目特定边界由 LLM 声明"的分工原则。
+# 下面是通用种子示范；工业控制等强约束项目应改写 cannot 列表更严格。
 prototypes:
   planner:
     responsibilities:
@@ -19,6 +26,12 @@ prototypes:
       - component specs
       - execution plan
     count: 1
+    boundaries:
+      cannot:
+        - "write production code (only specs/contracts)"
+        - "skip acceptance-criteria traceability"
+      max_context_lines: 600
+    requires_human_review: false
 
   executor:
     responsibilities:
@@ -33,6 +46,13 @@ prototypes:
       - source code
       - test code
     count: "ceil(S/2)"
+    boundaries:
+      cannot:
+        - "modify files outside can_write scope"
+        - "self-certify completion without running verification"
+        - "skip audit_log on control commands"
+      max_context_lines: 800
+    requires_human_review: false
 
   verifier:
     responsibilities:
@@ -47,6 +67,12 @@ prototypes:
       - test results
       - verification report
     count: 1
+    boundaries:
+      cannot:
+        - "modify source code under test"
+        - "mark criteria passed without evidence"
+      max_context_lines: 500
+    requires_human_review: false
 
   security-reviewer:
     condition: "C>=4"
@@ -60,6 +86,13 @@ prototypes:
     produces:
       - security review report
     count: 1
+    boundaries:
+      cannot:
+        - "accept self-signed certificates in production"
+        - "approve plaintext storage of secrets/PII"
+        - "skip audit_log review"
+      max_context_lines: 600
+    requires_human_review: true
 
   integration-checker:
     condition: "K>=3"
@@ -73,6 +106,12 @@ prototypes:
     produces:
       - integration report
     count: 1
+    boundaries:
+      cannot:
+        - "modify component interfaces to force a pass"
+        - "skip handoff-format validation"
+      max_context_lines: 600
+    requires_human_review: false
 
   knowledge-curator:
     condition: "N>=3"
@@ -86,6 +125,12 @@ prototypes:
     produces:
       - context brief
     count: 1
+    boundaries:
+      cannot:
+        - "fabricate domain facts not present in memory"
+        - "exceed context budget allocated to executors"
+      max_context_lines: 400
+    requires_human_review: false
 
 # 向后兼容：旧格式 roles 保留。agent-factory 在无 prototypes 时回退使用。
 # 新生成项目优先用 prototypes。

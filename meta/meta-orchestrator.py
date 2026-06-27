@@ -27,6 +27,7 @@ Usage:
 """
 
 import argparse
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -57,9 +58,11 @@ PIPELINE_PHASES = [
         "id": "GENERATE",
         "order": 2,
         "description": "Generate executable harness project from task definition",
-        "required_files": ["meta/harness-generator.md", "seeds/planning/project-yaml-template.yaml"],
-        "verification": "scripts/verify-generation.py",
-        "output": "Complete harness project in generated/[project-name]/",
+        "required_files": ["meta/harness-generator.md", "meta/harness-author.md",
+                            "seeds/planning/project-yaml-template.yaml"],
+        "verification": "scripts/validate-harness.py",
+        "output": "Complete harness project in generated/[project-name]/ "
+                  "(scaffold + LLM-authored slots + validated)",
     },
     {
         "id": "FACTORY",
@@ -111,14 +114,28 @@ PHASE: INTERPRET -- Intent -> Structured Task
 7. When confirmed, run: python meta/meta-orchestrator.py --advance
 """,
     "GENERATE": """
-PHASE: GENERATE -- Task -> Executable Harness Project
-=====================================================
-1. Read meta/harness-generator.md for generation rules
-2. Read the task definition from INTERPRET phase
-3. Generate a complete harness project in generated/[project-name]/
-4. Every layer must have concrete executable artifacts
-5. Run verification: python scripts/verify-generation.py generated/[project-name]/
-6. When verification passes, run: python meta/meta-orchestrator.py --advance
+PHASE: GENERATE -- Task -> Executable Harness Project (v2 LLM-driven flow)
+=========================================================================
+3-step flow (scaffold + LLM author + validate). --advance only auto-runs step 1.
+
+STEP 1 (auto-run by --advance): scaffold.py
+  - python scripts/scaffold.py --task task.yaml --output generated/[project-name]
+  - 输出：通用原语 + 25 个 LLM slot 基线 + harness-scaffold.yaml manifest
+
+STEP 2 (LLM must execute manually — script cannot do this):
+  - 读 meta/harness-author.md 的填充规范
+  - 读 generated/[project-name]/harness-scaffold.yaml 的 slot guidance
+  - 为每个 slot 改写出项目特定内容（NO mock，NO 通用占位）
+  - 重点 slot：planning/work-units.yaml, planning/sub-agent-dispatch.yaml,
+    constraints/architecture-rules.yaml, verification/security-guardrails.yaml
+
+STEP 3 (manual before --advance to FACTORY): validate-harness.py
+  - python scripts/validate-harness.py generated/[project-name]
+  - 必须 PASS 才能进入 FACTORY 阶段（pre-advance gate 会强制检查）
+  - 若 FAIL：按 errors 修复 slot，重跑校验
+
+When all 3 steps pass:
+  python meta/meta-orchestrator.py --advance
 """,
     "FACTORY": """
 PHASE: FACTORY -- Harness -> Agent Configurations
@@ -174,8 +191,9 @@ PHASE: EVOLVE -- Self-Improvement
 
 PHASE_SCRIPTS = {
     "GENERATE": {
-        "script": "scripts/generate.py",
-        "args": lambda state: ["--task", str(TASK_FILE)],
+        "script": "scripts/scaffold.py",
+        "args": lambda state: ["--task", str(TASK_FILE),
+                                "--output", _infer_output_dir(state)],
         "sets_state": "generated_project_dir",
     },
     "FACTORY": {
@@ -284,6 +302,66 @@ def _detect_generated_dir() -> Path:
         return None
     # Return the most recently modified one.
     return max(candidates, key=lambda d: d.stat().st_mtime)
+
+
+def _infer_output_dir(state: dict) -> str:
+    """Infer the GENERATE output dir from task.yaml BEFORE scaffold runs.
+
+    Reads task.yaml's `name` field (or falls back to state.project_name),
+    sanitizes it for use as a directory name, and returns
+    generated/<sanitized-name>. This is what --advance passes to
+    scaffold.py's --output arg. Post-run, _detect_generated_dir() re-detects
+    the actual dir from the .harness-generated marker (robust to renames).
+    """
+    if not TASK_FILE.exists():
+        raise RuntimeError("task.yaml not found -- run INTERPRET first")
+    with open(TASK_FILE, "r", encoding="utf-8") as f:
+        task = yaml.safe_load(f) or {}
+    name = task.get("name") or state.get("project_name") or "unnamed"
+    # Mirror scaffold.py's filename sanitization intent: keep it a valid
+    # directory name across platforms.
+    sanitized = re.sub(r"[^a-zA-Z0-9._-]", "-", str(name)).strip("-").lower() or "unnamed"
+    return str(META_ROOT / "generated" / sanitized)
+
+
+def _run_generate_advance_gate(state: dict) -> dict:
+    """Run validate-harness.py as the GENERATE -> FACTORY pre-advance gate.
+
+    Returns {"passed": bool, "reason": str}. The gate enforces that Step 2
+    (LLM-authored slot fills) and Step 3 (validate-harness.py PASS) are
+    complete before the pipeline advances. Without this, FACTORY would run
+    on a half-scaffolded harness (mock placeholders, missing work-units,
+    broken DAG refs) and produce garbage agent configs.
+
+    Failures here are blocking (unlike run_phase_script best-effort), because
+    advancing past GENERATE with a non-validating harness is task drift.
+    """
+    gen_dir = state.get("generated_project_dir")
+    if not gen_dir:
+        return {"passed": False,
+                "reason": "generated_project_dir not set (run scaffold.py Step 1 first)"}
+    gen_path = Path(gen_dir)
+    if not gen_path.exists():
+        return {"passed": False, "reason": f"directory does not exist: {gen_dir}"}
+
+    validate_script = META_ROOT / "scripts" / "validate-harness.py"
+    if not validate_script.exists():
+        return {"passed": False,
+                "reason": f"validate-harness.py not found at {validate_script}"}
+
+    cmd = [sys.executable, str(validate_script), str(gen_path)]
+    print("\n  🚦 Pre-advance gate: running validate-harness.py (GENERATE Step 3)")
+    print("  " + "-" * 60)
+    try:
+        result = subprocess.run(cmd, cwd=str(META_ROOT), capture_output=False)
+    except Exception as e:
+        return {"passed": False, "reason": f"validate-harness.py crashed: {e}"}
+    print("  " + "-" * 60)
+
+    if result.returncode != 0:
+        return {"passed": False,
+                "reason": f"validate-harness.py exited with code {result.returncode} -- see output above"}
+    return {"passed": True, "reason": "validate-harness.py PASSed"}
 
 
 def interpret_intent(state: dict, intent: str) -> dict:
@@ -577,6 +655,31 @@ def advance_phase(state: dict, auto_run: bool = True) -> dict:
         print("=" * 65)
         print()
         return state
+
+    # PRE-ADVANCE GATE: GENERATE -> FACTORY requires validate-harness.py PASS.
+    # The GENERATE phase is 3 steps (scaffold + LLM-author + validate). Step 1
+    # is auto-run; Step 2 (LLM slot fills) is manual; Step 3 is the gate.
+    # Without this gate, --advance from GENERATE would let FACTORY run on a
+    # half-filled harness (mock placeholders, missing work-units.yaml, etc.).
+    if current == "GENERATE":
+        gate = _run_generate_advance_gate(state)
+        if not gate["passed"]:
+            print()
+            print("=" * 65)
+            print("  BLOCKED: GENERATE pre-advance gate failed.")
+            print(f"  Reason: {gate['reason']}")
+            print("  The harness must PASS validate-harness.py before FACTORY.")
+            print("  Fix the slot fills above, then re-run:")
+            print("    python scripts/validate-harness.py <generated-project-dir>")
+            print("  Once it PASSes, re-run:")
+            print("    python meta/meta-orchestrator.py --advance")
+            print("=" * 65)
+            print()
+            state["errors"].append(
+                f"[GENERATE] {datetime.now().isoformat()}: pre-advance gate failed: {gate['reason']}"
+            )
+            save_state(state)
+            return state
 
     timestamp = datetime.now().isoformat()
     if current not in completed:

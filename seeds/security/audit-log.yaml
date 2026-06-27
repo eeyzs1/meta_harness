@@ -1,5 +1,13 @@
 version: 1
-description: Audit logging configuration
+description: >-
+  Audit logging configuration（策略文件，不是日志本身）。
+  本文件声明"要记什么/怎么记/是否不可篡改"——是配置 dict。
+  实际的不可篡改哈希链日志由 verification/audit-append.py 写到
+  <project_root>/audit_log.yaml（下划线，YAML list of records，
+  每条含 seq/timestamp/event/check_id/result/actor/payload_digest/
+  prev_hash/hash）。本文件与 audit_log.yaml 是两个独立产物：
+    - security/audit-log.yaml = 配置（LLM slot，可改）
+    - audit_log.yaml = 哈希链日志（运行时产物，不可手动改）
 logging:
   enabled: true
   level: INFO

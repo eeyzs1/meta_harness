@@ -58,12 +58,22 @@ def load_task() -> dict:
 def load_session_state() -> dict:
     state_file = PROJECT_ROOT / "memory" / "session-state.yaml"
     if not state_file.exists():
+        # 从 task.yaml 派生 acceptance_criteria 为 dict 列表（guard.py 期望）
+        task = load_task()
+        ac_strings = task.get("acceptance_criteria", []) or []
+        ac_dicts = []
+        for i, ac_text in enumerate(ac_strings, 1):
+            ac_dicts.append({
+                "id": f"AC{i}",
+                "description": ac_text,
+                "status": "pending",
+            })
         return {
             "status": "initialized",
             "progress": {
-                "acceptance_criteria": [],
-                "completed_criteria": [],
-                "failed_criteria": [],
+                "acceptance_criteria": ac_dicts,  # dict 列表（与 session-state.yaml schema 一致）
+                "completed_criteria": [],  # orchestrator 运行时用 task.yaml 字符串列表填充
+                "failed_criteria": [],  # 预留：未来记录失败 AC
             },
             "guard_log": [],
         }
