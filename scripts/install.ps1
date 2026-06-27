@@ -11,8 +11,8 @@ Write-Host ""
 
 # === 检测 ===
 
-# 是否已经在 submodule 中？
-if ((Test-Path "meta-harness/VERSION") -and (Test-Path ".gitmodules")) {
+# 是否已经在 submodule 中？（用 scripts/check-version.py 存在性作为 harness 项目标志）
+if ((Test-Path "meta-harness/scripts/check-version.py") -and (Test-Path ".gitmodules")) {
     Write-Host "Detected: submodule already present" -ForegroundColor Green
     Write-Host "Running init..."
     & "meta-harness/scripts/init-harness-submodule.ps1"

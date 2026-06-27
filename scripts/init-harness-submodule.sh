@@ -73,14 +73,10 @@ fi
 mkdir -p .meta-harness
 echo "  ✓ .meta-harness/ directory created"
 
-# 3. 复制 project.yaml 模板（注入当前版本号）
+# 3. 复制 project.yaml 模板（schema_version 已硬编码在模板中，无需替换）
 if [ ! -f ".meta-harness/project.yaml" ]; then
-  SCHEMA_VER=$(cat meta-harness/VERSION | tr -d ' \n\r')
   cp meta-harness/seeds/planning/project-yaml-template.yaml .meta-harness/project.yaml
-  # 替换 schema_version 占位符
-  sed -i "s|{{SCHEMA_VERSION}}|$SCHEMA_VER|g" .meta-harness/project.yaml 2>/dev/null || \
-  sed -i '' "s|{{SCHEMA_VERSION}}|$SCHEMA_VER|g" .meta-harness/project.yaml 2>/dev/null || true
-  echo "  ✓ .meta-harness/project.yaml created (schema: $SCHEMA_VER)"
+  echo "  ✓ .meta-harness/project.yaml created"
 else
   echo "  ⚠ .meta-harness/project.yaml exists — not overwritten"
 fi

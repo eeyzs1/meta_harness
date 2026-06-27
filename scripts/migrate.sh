@@ -17,8 +17,8 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MH_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CURRENT_SCHEMA=$(cat "$MH_ROOT/VERSION" | tr -d ' \n\r')
-TARGET_SCHEMA="$CURRENT_SCHEMA"
+# schema 版本与框架版本解耦：project.yaml 结构版本独立追踪，仅在 breaking change 时递增
+TARGET_SCHEMA="2.0"
 
 echo "=== project.yaml Migration ==="
 echo ""

@@ -87,9 +87,13 @@ if ($Content -notmatch "meta-harness") {
     exit 1
 }
 
-# Step 2: 记录当前版本
-$VersionFile = Join-Path $MHRoot "VERSION"
-$CurrentVersion = if (Test-Path $VersionFile) { (Get-Content $VersionFile).Trim() } else { "unknown" }
+# Step 2: 记录当前版本（基于 git tag，不依赖 VERSION 文件）
+$describeOut = git -C $MHRoot describe --tags --abbrev=0 2>&1
+if ($LASTEXITCODE -eq 0 -and $describeOut) {
+    $CurrentVersion = "$describeOut".Trim()
+} else {
+    $CurrentVersion = "unknown"
+}
 Write-Host "Current version: $CurrentVersion"
 
 # Step 3: Git pull
@@ -97,7 +101,14 @@ Write-Host ""
 Write-Host "--- Pulling latest framework ---"
 Invoke-PullWithFallback -RepoDir $MHRoot
 
-$NewVersion = if (Test-Path $VersionFile) { (Get-Content $VersionFile).Trim() } else { "unknown" }
+# 拉取后获取最新 tag（需要 fetch tags 才能 describe 到刚 pull 下来的新 tag）
+git -C $MHRoot fetch --tags --quiet 2>&1 | Out-Null
+$describeOut = git -C $MHRoot describe --tags --abbrev=0 2>&1
+if ($LASTEXITCODE -eq 0 -and $describeOut) {
+    $NewVersion = "$describeOut".Trim()
+} else {
+    $NewVersion = "unknown"
+}
 Write-Host "Updated to: $NewVersion"
 
 # Step 4: 迁移 project.yaml

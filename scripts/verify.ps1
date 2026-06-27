@@ -18,11 +18,11 @@ function Check {
     }
 }
 
-# 1. Submodule
-if ((Test-Path "meta-harness") -and (Test-Path "meta-harness/VERSION")) {
-    Check "Submodule meta-harness/ exists with VERSION" "pass"
+# 1. Submodule（用 scripts/check-version.py 存在性作为 harness 项目标志）
+if ((Test-Path "meta-harness") -and (Test-Path "meta-harness/scripts/check-version.py")) {
+    Check "Submodule meta-harness/ exists (with check-version.py)" "pass"
 } else {
-    Check "Submodule meta-harness/ exists with VERSION" "fail"
+    Check "Submodule meta-harness/ exists (with check-version.py)" "fail"
 }
 
 # 2. .gitmodules
@@ -32,12 +32,13 @@ if ((Test-Path ".gitmodules") -and ((Get-Content ".gitmodules" -Raw) -match "met
     Check ".gitmodules references meta-harness" "fail"
 }
 
-# 3. VERSION
-if (Test-Path "meta-harness/VERSION") {
-    $ver = (Get-Content "meta-harness/VERSION").Trim()
-    Check "VERSION file readable: $ver" "pass"
+# 3. 框架版本（基于 git tag）
+$verOut = git -C "meta-harness" describe --tags --abbrev=0 2>&1
+if ($LASTEXITCODE -eq 0 -and $verOut) {
+    $fwVer = "$verOut".Trim()
+    Check "Framework version via git tag: $fwVer" "pass"
 } else {
-    Check "VERSION file readable" "fail"
+    Check "Framework version via git tag" "fail"
 }
 
 # 4. project.yaml

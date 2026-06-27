@@ -74,12 +74,10 @@ Full rules live at `meta-harness/meta/rules/` — load only when needed.
 New-Item -ItemType Directory -Force -Path ".meta-harness" | Out-Null
 Write-Host "  ✓ .meta-harness/ directory created"
 
-# 3. 复制 project.yaml 模板（注入当前版本号）
+# 3. 复制 project.yaml 模板（schema_version 已硬编码在模板中，无需替换）
 if (-not (Test-Path ".meta-harness/project.yaml")) {
-    $SchemaVer = (Get-Content "meta-harness/VERSION").Trim()
     Copy-Item "meta-harness/seeds/planning/project-yaml-template.yaml" ".meta-harness/project.yaml"
-    (Get-Content ".meta-harness/project.yaml" -Raw) -replace '\{\{SCHEMA_VERSION\}\}', $SchemaVer | Set-Content ".meta-harness/project.yaml" -Encoding UTF8
-    Write-Host "  ✓ .meta-harness/project.yaml created (schema: $SchemaVer)"
+    Write-Host "  ✓ .meta-harness/project.yaml created"
 } else {
     Write-Host "  ⚠ .meta-harness/project.yaml exists — not overwritten"
 }

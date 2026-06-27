@@ -9,7 +9,7 @@
 project:
   name: "{{PROJECT_NAME}}"
   description: "{{PROJECT_DESCRIPTION}}"
-  schema_version: "{{SCHEMA_VERSION}}"  # 框架用来检测是否需要迁移
+  schema_version: "2.0"  # project.yaml 结构版本，仅在 breaking change 时递增（与框架版本独立）
 
 # === 仓库 ===
 # 至少一个。language 用于自动选择正确的 lint/test 命令。

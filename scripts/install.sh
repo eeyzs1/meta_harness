@@ -17,8 +17,8 @@ echo ""
 
 # === 检测 ===
 
-# 是否已经在 submodule 中运行？
-if [ -f "meta-harness/VERSION" ] && [ -f ".gitmodules" ]; then
+# 是否已经在 submodule 中运行？（用 scripts/check-version.py 存在性作为 harness 项目标志）
+if [ -f "meta-harness/scripts/check-version.py" ] && [ -f ".gitmodules" ]; then
     echo -e "${GREEN}Detected: submodule already present${RESET}"
     echo "Running init..."
     bash meta-harness/scripts/init-harness-submodule.sh

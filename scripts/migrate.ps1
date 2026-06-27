@@ -16,8 +16,8 @@ if (-not (Test-Path $ProjectYamlPath)) {
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $MHRoot = Split-Path -Parent $ScriptDir
 
-$VersionFile = Join-Path $MHRoot "VERSION"
-$TargetSchema = (Get-Content $VersionFile).Trim()
+# schema 版本与框架版本解耦：project.yaml 结构版本独立追踪，仅在 breaking change 时递增
+$TargetSchema = "2.0"
 
 Write-Host "=== project.yaml Migration ==="
 Write-Host ""

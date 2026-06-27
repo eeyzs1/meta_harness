@@ -76,8 +76,8 @@ if ! grep -q "meta-harness" "$PROJECT_ROOT/.gitmodules" 2>/dev/null; then
   exit 1
 fi
 
-# Step 2: 记录当前版本
-CURRENT_VERSION=$(cat "$MH_ROOT/VERSION" 2>/dev/null | tr -d ' \n\r' || echo "unknown")
+# Step 2: 记录当前版本（基于 git tag，不依赖 VERSION 文件）
+CURRENT_VERSION=$(git -C "$MH_ROOT" describe --tags --abbrev=0 2>/dev/null || echo "unknown")
 echo "Current version: $CURRENT_VERSION"
 
 # Step 3: Git pull
@@ -85,7 +85,9 @@ echo ""
 echo "--- Pulling latest framework ---"
 pull_with_fallback "$MH_ROOT"
 
-NEW_VERSION=$(cat "$MH_ROOT/VERSION" 2>/dev/null | tr -d ' \n\r')
+# 拉取后获取最新 tag（需要 fetch tags 才能 describe 到刚 pull 下来的新 tag）
+git -C "$MH_ROOT" fetch --tags --quiet 2>/dev/null || true
+NEW_VERSION=$(git -C "$MH_ROOT" describe --tags --abbrev=0 2>/dev/null || echo "unknown")
 echo "Updated to: $NEW_VERSION"
 
 # Step 4: 迁移 project.yaml（如果 schema 版本变化）

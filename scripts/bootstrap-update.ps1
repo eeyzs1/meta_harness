@@ -67,7 +67,8 @@ $HasGitmodules = Test-Path ".gitmodules"
 if ($HasGitmodules) {
     $Content = Get-Content ".gitmodules" -Raw
     if ($Content -match "meta-harness") {
-        if (Test-Path "meta-harness/VERSION") {
+        # 用 scripts/check-version.py 存在性作为"是否是 harness 项目"的标志
+        if (Test-Path "meta-harness/scripts/check-version.py") {
             $Type = "A"
         }
     }

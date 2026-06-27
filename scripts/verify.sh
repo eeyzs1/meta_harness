@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # verify.sh — 检查 meta-harness 安装是否健康
 # 用法：bash meta-harness/scripts/verify.sh
-# 检查项：submodule 存在、VERSION 可读、project.yaml 存在、AGENTS.md 正确、.gitmodules 正确
+# 检查项：submodule 存在、git tag 可读、project.yaml 存在、AGENTS.md 正确、.gitmodules 正确
 
 set -euo pipefail
 
@@ -33,11 +33,11 @@ check() {
     fi
 }
 
-# 1. Submodule 存在
-if [ -d "meta-harness" ] && [ -f "meta-harness/VERSION" ]; then
-    check "Submodule meta-harness/ exists with VERSION" "pass"
+# 1. Submodule 存在（用 scripts/check-version.py 存在性作为 harness 项目标志）
+if [ -d "meta-harness" ] && [ -f "meta-harness/scripts/check-version.py" ]; then
+    check "Submodule meta-harness/ exists (with check-version.py)" "pass"
 else
-    check "Submodule meta-harness/ exists with VERSION" "fail"
+    check "Submodule meta-harness/ exists (with check-version.py)" "fail"
 fi
 
 # 2. .gitmodules 包含 meta-harness
@@ -47,12 +47,12 @@ else
     check ".gitmodules references meta-harness" "fail"
 fi
 
-# 3. VERSION 可读
-if [ -f "meta-harness/VERSION" ]; then
-    VER=$(cat meta-harness/VERSION 2>/dev/null || echo "?")
-    check "VERSION file readable: $VER" "pass"
+# 3. 框架版本（基于 git tag）
+VER=$(git -C "meta-harness" describe --tags --abbrev=0 2>/dev/null || echo "")
+if [ -n "$VER" ]; then
+    check "Framework version via git tag: $VER" "pass"
 else
-    check "VERSION file readable" "fail"
+    check "Framework version via git tag" "fail"
 fi
 
 # 4. project.yaml 存在

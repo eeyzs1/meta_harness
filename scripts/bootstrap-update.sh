@@ -75,7 +75,8 @@ echo ""
 detect_type() {
     # Type A: submodule
     if [ -f ".gitmodules" ] && grep -q "meta-harness" .gitmodules 2>/dev/null; then
-        if [ -f "meta-harness/VERSION" ]; then
+        # 用 scripts/check-version.py 存在性作为"是否是 harness 项目"的标志
+        if [ -f "meta-harness/scripts/check-version.py" ]; then
             echo "A"
             return
         fi
