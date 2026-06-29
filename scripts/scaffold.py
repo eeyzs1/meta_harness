@@ -108,6 +108,8 @@ LLM_SLOTS = [
      "分析 task 的数据流与敏感数据面，写 PII/secret 模式与危险操作拦截（针对该项目领域）。"),
     ("feedback", "retry-config.yaml",
      "按该项目可能的错误类型，写重试策略。"),
+    ("feedback", "fixer-registry.yaml",
+     "按该项目 retry-config 的 strategy，为可机械修复的错误类型绑定定向 fixer（match/handler/entry/safe）。通用 ruff_autofix 条目保留，项目特定 fixer 据 task.yaml + work-units + retry-config 推演追加，并在 feedback/fixers/ 生成实现。"),
     ("feedback", "human-interface.yaml",
      "按该项目人工 review 需求，写人机界面配置（何时暂停、如何呈现、谁 review）。仅在 C>=4 时生成。"),
     ("constraints", "architecture-rules.yaml",
@@ -147,7 +149,7 @@ ARTIFACT_GATE = {
         "session-replay.yaml": "tier=='full'",
         "versioning.yaml": "always",
     },
-    "feedback": {"retry-config.yaml": "always", "human-interface.yaml": "C>=4"},
+    "feedback": {"retry-config.yaml": "always", "fixer-registry.yaml": "always", "human-interface.yaml": "C>=4"},
     "security": {
         "sandbox-config.yaml": "tier!='minimal'",
         "encryption-rules.yaml": "C>=3",
@@ -207,6 +209,25 @@ def file_hash(path: Path) -> str:
     return hashlib.md5(path.read_bytes()).hexdigest()
 
 
+def _copy_fixer_primitives(output_dir: Path) -> list:
+    """复制通用 fixer 原语（seeds/feedback/fixers/*.py → output/feedback/fixers/）。
+
+    通用 fixer 是 domain-agnostic 的（如 ruff-fixer），所有项目共享，scaffold 原样复制。
+    项目特定 fixer 由 LLM 在 GENERATE 阶段生成，不在此处复制。
+    返回已复制的相对路径列表（供日志）。
+    """
+    fixers_src = SEEDS_DIR / "feedback" / "fixers"
+    copied = []
+    if not fixers_src.exists():
+        return copied
+    dest_dir = output_dir / "feedback" / "fixers"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for f in fixers_src.glob("*.py"):
+        shutil.copy2(f, dest_dir / f.name)
+        copied.append(f"feedback/fixers/{f.name}")
+    return copied
+
+
 def scaffold(task: dict, output_dir: Path) -> None:
     profile = compute_profile(task)
     output_dir = output_dir.resolve()
@@ -228,6 +249,9 @@ def scaffold(task: dict, output_dir: Path) -> None:
     # 1. 创建所有层目录
     for layer in LAYER_DIRS:
         (output_dir / layer).mkdir(exist_ok=True)
+
+    # 1b. 复制通用 fixer 原语（feedback/fixers/ 子目录，scaffold 原样复制）
+    copied_fixers = _copy_fixer_primitives(output_dir)
 
     # 2. 复制通用原语（domain-agnostic，原样）
     copied_universal = []

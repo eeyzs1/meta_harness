@@ -19,3 +19,7 @@ memory/generation-log.yaml
 # task.yaml 是 INTERPRET 阶段的运行时输出（会随用户任务变化）。
 # 示例 task 见 tests/task-industrial-control.yaml；首次运行用 --interpret-intent 生成。
 task.yaml
+
+# IDE / tooling working dirs
+.trae/
+.vscode/

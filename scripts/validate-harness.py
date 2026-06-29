@@ -396,6 +396,62 @@ def validate(harness_dir: Path) -> tuple:
         report.append(f"  PASS — all {len(referenced)} referenced scripts exist (or are universal primitives)")
     report.append("")
 
+    # 8. fixer-registry handler integrity——每条 handler 指向的 .py 必须存在
+    #    registry 缺失/不可解析/handler 悬空 = ERROR（阻断 GENERATE→FACTORY）
+    #    因为 apply_fixes 经 importlib 调 handler，缺失会 runtime FileNotFoundError
+    report.append("[8] Fixer-registry handler integrity")
+    registry_file = harness_dir / "feedback" / "fixer-registry.yaml"
+    if not registry_file.exists():
+        msg = "  MISSING feedback/fixer-registry.yaml — apply_fixes cannot dispatch fixes"
+        report.append(msg)
+        errors.append(msg)
+    else:
+        registry = load_yaml(registry_file)
+        if isinstance(registry, str) and str(registry).startswith("__PARSE_ERROR__"):
+            msg = f"  YAML PARSE ERROR in feedback/fixer-registry.yaml: {registry}"
+            report.append(msg)
+            errors.append(msg)
+        elif not isinstance(registry, dict):
+            msg = "  feedback/fixer-registry.yaml not a valid dict"
+            report.append(msg)
+            errors.append(msg)
+        else:
+            fixers = registry.get("fixers") or {}
+            if not isinstance(fixers, dict):
+                msg = "  fixer-registry.fixers not a dict — no fixers bound"
+                report.append(msg)
+                errors.append(msg)
+            elif not fixers:
+                msg = "  WARN — fixer-registry.fixers is empty (no fixers bound, apply_fixes will fully defer to manual)"
+                report.append(msg)
+                warnings.append(msg)
+            else:
+                missing_handlers = []
+                for fixer_name, cfg in fixers.items():
+                    if not isinstance(cfg, dict):
+                        msg = f"  fixer '{fixer_name}' cfg not a dict — skip"
+                        report.append(msg)
+                        warnings.append(msg)
+                        continue
+                    handler = cfg.get("handler")
+                    if not handler:
+                        msg = f"  fixer '{fixer_name}' missing 'handler' field"
+                        report.append(msg)
+                        errors.append(msg)
+                        continue
+                    if not (harness_dir / handler).exists():
+                        missing_handlers.append((fixer_name, handler))
+                if missing_handlers:
+                    for name, h in missing_handlers:
+                        msg = (f"  MISSING fixer handler: fixer='{name}' handler='{h}' "
+                               f"— apply_fixes will FileNotFoundError at runtime")
+                        report.append(msg)
+                        errors.append(msg)
+                    report.append(f"  FAIL — {len(missing_handlers)} fixer handler(s) missing")
+                else:
+                    report.append(f"  PASS — {len(fixers)} fixer(s) registered, all handler paths exist")
+    report.append("")
+
     # 总结
     report.append("=== Summary ===")
     report.append(f"  Errors:   {len(errors)}")

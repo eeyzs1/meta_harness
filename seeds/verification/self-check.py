@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import datetime
 import subprocess
 import sys
 from pathlib import Path
@@ -107,8 +108,16 @@ def reflect_on_errors(errors: list, retry_config: dict) -> list:
                 fix_hint = pe.get("fix_hint", "")
                 strategy = _get_retry_strategy(error_type, retry_config)
                 fixes.append({"type": strategy, "action": fix_hint, "source": source, "error_type": error_type})
-        elif "unused import" in output:
-            fixes.append({"type": "auto_fix", "action": "remove_unused_imports", "source": source})
+        elif "unused import" in output or "imported but unused" in output:
+            # ruff 的 unused-import 警告可被 ruff --fix 机械移除。
+            # 显式声明 (error_type=import_error, strategy=immediate_with_fix_hint)
+            # 让 apply_fixes 经 fixer-registry 命中 ruff_autofix（而非硬编码 auto_fix）。
+            # 注意：这与 error-capture 解析出的 import_error(ImportError/ModuleNotFoundError)
+            # 是不同子类——后者 strategy=manual_fix（retry-config 未映射），不命中 registry，
+            # 正确转 pending（ruff 装不了缺失模块）。
+            # 匹配两种措辞：pylint "unused import" + ruff F401 "imported but unused"。
+            fixes.append({"type": "immediate_with_fix_hint", "action": "remove_unused_imports",
+                          "source": source, "error_type": "import_error"})
         elif "undefined name" in output:
             fixes.append({"type": "manual_fix", "action": "add_missing_import_or_definition", "source": source})
         else:
@@ -123,6 +132,193 @@ def _get_retry_strategy(error_type: str, retry_config: dict) -> str:
         if error_type in strategy_data.get("error_types", []):
             return strategy_data.get("strategy", "manual_fix")
     return "manual_fix"
+
+
+def _load_fixer_registry(project_root: Path) -> dict:
+    """加载 feedback/fixer-registry.yaml。缺失/不可解析/非 dict 时返回 {}。
+
+    Registry schema（见 seeds/feedback/fixer-registry.yaml）：
+      version: 1
+      fixers:
+        <name>:
+          match: {strategy: [...], error_types: [...]}
+          handler: "feedback/fixers/<name>.py"
+          entry: "fix"
+          safe: true|false
+          description: "..."
+    """
+    registry_file = project_root / "feedback" / "fixer-registry.yaml"
+    if not registry_file.exists():
+        return {}
+    try:
+        with open(registry_file, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _find_fixer(error_type: str, strategy: str, registry: dict) -> tuple:
+    """按 (error_type, strategy) 双键查 fixer。
+
+    匹配规则：fixer.match.strategy 包含 strategy 且 fixer.match.error_types 包含 error_type。
+    返回 (fixer_name, cfg) 或 (None, None)。
+    """
+    fixers = registry.get("fixers") or {}
+    for name, cfg in fixers.items():
+        if not isinstance(cfg, dict):
+            continue
+        match = cfg.get("match") or {}
+        match_strategies = match.get("strategy") or []
+        match_error_types = match.get("error_types") or []
+        if strategy in match_strategies and error_type in match_error_types:
+            return name, cfg
+    return None, None
+
+
+def _invoke_fixer(handler_path: Path, entry: str, error: dict, context: dict,
+                  project_root: Path) -> dict:
+    """经 importlib 动态调用 fixer 的 entry 函数。
+
+    契约：fix(error, context, project_root) -> {"applied", "method", "output", "deferred"}
+    import/call 异常或返回非 dict 时返回安全降值（applied=False），由调用方转 pending。
+    """
+    import importlib.util
+    try:
+        spec = importlib.util.spec_from_file_location(f"fixer_{handler_path.stem}", handler_path)
+        if spec is None or spec.loader is None:
+            return {"applied": False, "method": None,
+                    "output": f"cannot load spec: {handler_path}", "deferred": False}
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        fn = getattr(mod, entry, None)
+        if fn is None or not callable(fn):
+            return {"applied": False, "method": None,
+                    "output": f"entry '{entry}' not found in {handler_path.name}", "deferred": False}
+        result = fn(error, context, project_root)
+        if not isinstance(result, dict):
+            return {"applied": False, "method": None,
+                    "output": f"fixer returned non-dict: {type(result).__name__}", "deferred": False}
+        return {
+            "applied": bool(result.get("applied", False)),
+            "method": result.get("method"),
+            "output": result.get("output", ""),
+            "deferred": bool(result.get("deferred", False)),
+        }
+    except Exception as e:
+        return {"applied": False, "method": None,
+                "output": f"fixer exception: {e}", "deferred": False}
+
+
+def _append_pending_fixes(pending_path: Path, fixes: list) -> None:
+    """把 manual_fix 追加到 feedback/pending-fixes.yaml，供 LLM/人工跟进。
+
+    采用 读取→合并→写回 模式（避免 append 破坏 YAML 结构）。每条带时间戳，
+    便于审计追溯（符合"状态变更可追溯"约束）。
+    """
+    pending_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = []
+    if pending_path.exists():
+        try:
+            with open(pending_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            if isinstance(data, list):
+                existing = data
+        except Exception:
+            pass  # 旧文件不可读则覆盖
+
+    ts = datetime.datetime.now().isoformat(timespec="seconds")
+    for fx in fixes:
+        existing.append({"recorded_at": ts, **fx})
+
+    with open(pending_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(existing, f, allow_unicode=True, sort_keys=False)
+
+
+def apply_fixes(fixes: list, project_root: Path) -> list:
+    """合拢 self-check 闭环的关键一步：真正应用修复，由 fixer-registry 驱动。
+
+    每条 fix 的 `type` 字段是 retry-config 解析出的 strategy（如
+    immediate_with_fix_hint / no_retry / exponential_backoff / manual_fix），
+    `error_type` 是 error-capture 解析出的错误类型。本函数按 (error_type, strategy)
+    双键查 fixer-registry：
+
+      1. 命中且 safe=true  → importlib 调 fixer.fix(error, context, project_root)
+         - applied=True 且 deferred=False：成功应用
+         - applied=False 或 deferred=True：fixer 跑了但修不了，转 pending
+      2. 命中但 safe=false  → 不调 fixer，直接写 pending（人工确认）
+      3. 未命中（无 fixer / registry 缺失）→ 写 pending（降级 manual_fix）
+
+    遵守 runtime-hooks 不变量：机械不可修的不自动改业务代码；safe=false 由人工确认。
+    返回每条 fix 的应用结果 list，供 self_check_loop 写入 history 做审计追溯。
+    """
+    registry = _load_fixer_registry(project_root)
+    pending_path = project_root / "feedback" / "pending-fixes.yaml"
+
+    results = []
+    pending = []
+    for fx in fixes:
+        error_type = fx.get("error_type", "unknown")
+        strategy = fx.get("type", "manual_fix")
+        context = {"source": fx.get("source"), "action": fx.get("action"),
+                   "detail": fx.get("detail", "")}
+        record = {"fix": fx, "applied": False, "method": None, "output": ""}
+
+        fixer_name, cfg = _find_fixer(error_type, strategy, registry)
+
+        if fixer_name is None:
+            # 未命中：降级 manual_fix
+            pending.append(fx)
+            record["method"] = "pending_manual"
+            record["output"] = (f"no fixer bound for (error_type={error_type}, "
+                                f"strategy={strategy}) — deferred to manual")
+            results.append(record)
+            continue
+
+        handler_rel = cfg.get("handler")
+        safe = bool(cfg.get("safe", False))
+        entry = cfg.get("entry", "fix")
+        handler_path = project_root / handler_rel
+
+        if not safe:
+            # safe=false：不自动执行，写 pending 由人工确认
+            pending.append(fx)
+            record["method"] = f"pending_manual (fixer={fixer_name}, safe=false)"
+            record["output"] = f"fixer '{fixer_name}' safe=false — requires human review"
+            results.append(record)
+            continue
+
+        if not handler_path.exists():
+            # safe=true 但 handler 文件缺失——降级 pending，不假装修复（anti-mock）
+            pending.append(fx)
+            record["method"] = f"pending_manual (fixer={fixer_name}, handler missing)"
+            record["output"] = f"handler not found: {handler_rel}"
+            results.append(record)
+            continue
+
+        # safe=true 且 handler 存在：经 importlib 调 fixer
+        error_dict = {"type": error_type, "strategy": strategy,
+                      "action": fx.get("action"), "source": fx.get("source"),
+                      "detail": fx.get("detail", "")}
+        fixer_result = _invoke_fixer(handler_path, entry, error_dict, context, project_root)
+        record["method"] = fixer_result["method"] or f"fixer:{fixer_name}"
+        record["output"] = fixer_result["output"]
+
+        if fixer_result["applied"] and not fixer_result["deferred"]:
+            record["applied"] = True
+        else:
+            # applied=False 或 deferred=True → 转人工
+            pending.append(fx)
+            record["applied"] = False
+            if fixer_result["deferred"]:
+                record["method"] = f"pending_manual (fixer={fixer_name}, deferred)"
+
+        results.append(record)
+
+    if pending:
+        _append_pending_fixes(pending_path, pending)
+
+    return results
 
 
 def self_check_loop(project_root: Path, max_iterations: int) -> dict:
@@ -143,6 +339,17 @@ def self_check_loop(project_root: Path, max_iterations: int) -> dict:
         print(f"   Proposed fixes: {len(fixes)}")
         for fix in fixes:
             print(f"   - [{fix['type']}] {fix['action']}")
+
+        # 合拢闭环：真正应用修复，下一次迭代 run_verification 才能看到变化。
+        # 之前断在这里——fixes 只 print 不 apply，导致 2/3 次迭代必然重复失败。
+        applied = apply_fixes(fixes, project_root)
+        history[-1]["applied_fixes"] = applied
+        auto_ok = sum(1 for a in applied if a.get("applied"))
+        # method 现在可能是 "pending_manual" / "pending_manual (fixer=..., safe=false)" /
+        # "pending_manual (fixer=..., deferred)" 等——用 startswith 兜住所有 pending 变体
+        deferred = sum(1 for a in applied
+                       if str(a.get("method", "")).startswith("pending_manual"))
+        print(f"   Applied: {auto_ok} auto-fix / {deferred} deferred to manual")
 
     print(f"\n⚠️  Self-check loop exhausted ({max_iterations} iterations)")
     return {"passed": False, "iterations": max_iterations, "history": history}
