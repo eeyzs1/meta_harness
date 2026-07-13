@@ -134,6 +134,121 @@ def prioritize_innovations(proposals: list) -> list:
     return sorted(proposals, key=score, reverse=True)
 
 
+# ============================================================================
+# Doc staleness detection (v2.6+)
+# 读 docs/{harness,project}-doc-contract.yaml 的 evolution.staleness_check，
+# 检查文档文件是否过时（mtime > max_age_days）。过时则生成 doc_refresh 提案。
+# ============================================================================
+
+DOC_CONTRACT_FILES = [
+    "docs/harness-doc-contract.yaml",
+    "docs/project-doc-contract.yaml",
+]
+
+
+def detect_doc_staleness(project_root: Path) -> list:
+    """扫所有 doc contracts，检测文档过时。
+
+    Returns:
+      stale docs list: [{"contract_file", "doc_name", "path", "age_days",
+                          "max_age_days", "proposal_type"}...]
+    """
+    now = datetime.now()
+    stale_docs = []
+
+    for contract_rel in DOC_CONTRACT_FILES:
+        contract_file = project_root / contract_rel
+        if not contract_file.exists():
+            continue
+        try:
+            with open(contract_file, "r", encoding="utf-8") as f:
+                contract = yaml.safe_load(f) or {}
+        except Exception:
+            continue
+
+        evo_cfg = contract.get("evolution") or {}
+        staleness = evo_cfg.get("staleness_check") or {}
+        if not staleness.get("enabled", False):
+            continue
+
+        max_age_days = staleness.get("max_age_days", 30)
+        proposal_type = staleness.get("proposal_type", "doc_refresh")
+        trigger = staleness.get("trigger", "innovation_engine")
+
+        for doc in contract.get("documents") or []:
+            doc_name = doc.get("name")
+            if not doc_name:
+                continue
+            doc_path = project_root / doc_name
+            if not doc_path.exists():
+                # 文档不存在——本身就是 stale（应该 generate_when 触发但没生成）
+                stale_docs.append({
+                    "contract_file": contract_rel,
+                    "doc_name": doc_name,
+                    "path": str(doc_path),
+                    "age_days": None,
+                    "max_age_days": max_age_days,
+                    "proposal_type": proposal_type,
+                    "reason": "doc file missing",
+                })
+                continue
+
+            # 检查 mtime
+            try:
+                mtime = datetime.fromtimestamp(doc_path.stat().st_mtime)
+                age_days = (now - mtime).days
+                if age_days > max_age_days:
+                    stale_docs.append({
+                        "contract_file": contract_rel,
+                        "doc_name": doc_name,
+                        "path": str(doc_path),
+                        "age_days": age_days,
+                        "max_age_days": max_age_days,
+                        "proposal_type": proposal_type,
+                        "reason": f"doc last modified {age_days} days ago (max {max_age_days})",
+                    })
+            except Exception as e:
+                stale_docs.append({
+                    "contract_file": contract_rel,
+                    "doc_name": doc_name,
+                    "path": str(doc_path),
+                    "age_days": None,
+                    "max_age_days": max_age_days,
+                    "proposal_type": proposal_type,
+                    "reason": f"cannot stat: {e}",
+                })
+
+    return stale_docs
+
+
+def propose_doc_refresh(stale_docs: list) -> list:
+    """把 stale docs 转成 doc_refresh 提案。"""
+    proposals = []
+    for i, sd in enumerate(stale_docs, 1):
+        age_str = f"{sd['age_days']} days" if sd["age_days"] is not None else "unknown"
+        proposals.append({
+            "id": f"DOC-REFRESH-{i:03d}",
+            "name": f"Refresh stale doc: {sd['doc_name']}",
+            "description": (
+                f"Document {sd['doc_name']} is stale ({sd['reason']}). "
+                f"Regenerate per {sd['contract_file']}."
+            ),
+            "category": "documentation",
+            "effort": "low",
+            "impact": "medium",
+            "trigger_condition": f"doc staleness check: age={age_str}, max={sd['max_age_days']}d",
+            "target_stage": "current",
+            "type": "doc_refresh",
+            "requires_approval": False,
+            "proposed_at": datetime.now().isoformat(),
+            "doc_path": sd["path"],
+            "doc_name": sd["doc_name"],
+            "proposal_type": sd["proposal_type"],
+        })
+    return proposals
+
+
+
 def run_innovation_cycle(project_root: Path, dry_run: bool = False) -> dict:
     print(f"\n{'='*60}")
     print("INNOVATION ENGINE — 推陈出新")
@@ -159,6 +274,18 @@ def run_innovation_cycle(project_root: Path, dry_run: bool = False) -> dict:
     print(f"Domain template: {template_name}")
 
     proposals = propose_innovations(product_state, advancements, current_stage)
+
+    # Doc staleness check (v2.6+)：与 product innovation 并行
+    # 注意：doc_refresh 不受 all_met 限制——即使 AC 未全完成，文档也可能过时
+    stale_docs = detect_doc_staleness(project_root)
+    if stale_docs:
+        doc_proposals = propose_doc_refresh(stale_docs)
+        proposals.extend(doc_proposals)
+        print(f"\n📄 Doc staleness: {len(stale_docs)} stale doc(s) detected")
+        for sd in stale_docs:
+            age_str = f"{sd['age_days']}d" if sd["age_days"] is not None else "?"
+            print(f"   - {sd['doc_name']} (age={age_str}, max={sd['max_age_days']}d) — {sd['reason']}")
+
     proposals = prioritize_innovations(proposals)
 
     if not proposals:

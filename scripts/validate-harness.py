@@ -48,6 +48,15 @@ REQUIRED_UNIVERSAL = [
     "verification/audit-append.py",
     "verification/lint-check.py",
     "evolution/framework.md",
+    # Runtime layer 通用原语（v2.6+）——多 worktree 并发基础设施
+    "runtime/supervisor.py",
+    "runtime/worktree_lifecycle.py",
+    "runtime/leaf_protocol.py",
+    "runtime/leaf_prepare.py",
+    "runtime/leaf_record.py",
+    "runtime/event_stream.py",
+    "runtime/rebase_sync.py",
+    "runtime/workitem_source.py",
     # evolution/genome.yaml 和 evolution/log.yaml 是 LLM slot（在 LLM_SLOTS 里），
     # 由 check #2（slot enrichment）校验存在 + hash 改过，不在这里重复校验。
 ]
@@ -450,6 +459,201 @@ def validate(harness_dir: Path) -> tuple:
                     report.append(f"  FAIL — {len(missing_handlers)} fixer handler(s) missing")
                 else:
                     report.append(f"  PASS — {len(fixers)} fixer(s) registered, all handler paths exist")
+    report.append("")
+
+    # 9. Runtime layer 完整性（v2.6+）——supervisor/worktree/workitem-source/doc contract
+    #    - check #9a: runtime-config.yaml 存在且 supervisor 配置合理
+    #    - check #9b: workitem-source.yaml 存在 + adapter 实现存在 + 接口实现完整
+    #    - check #9c: merge-policy.yaml 与 criticality 一致（C>=4 必须 rebase_only）
+    #    - check #9d: agent-protocol.yaml 的 role 与 sub-agent-dispatch prototypes 一致
+    #    - check #9e: doc contracts 存在 + 含 evolution 字段
+    report.append("[9] Runtime layer integrity (supervisor + worktree + workitem-source + docs)")
+    profile = manifest.get("profile") or {}
+    scope = profile.get("scope", 3)
+    criticality = profile.get("criticality", 3)
+
+    # 9a. runtime-config.yaml
+    rc_file = harness_dir / "planning" / "runtime-config.yaml"
+    if scope < 3:
+        # scope<3 不强制 runtime-config（gate 过滤掉了）
+        report.append("  SKIP — scope<3, runtime-config gated out (single-session mode)")
+    elif not rc_file.exists():
+        msg = "  MISSING planning/runtime-config.yaml — supervisor cannot run"
+        report.append(msg)
+        errors.append(msg)
+    else:
+        rc = load_yaml(rc_file)
+        if isinstance(rc, dict):
+            sup = rc.get("supervisor") or {}
+            if sup.get("enabled"):
+                if not rc.get("stop_conditions"):
+                    msg = "  runtime-config.stop_conditions empty — supervisor has no stop condition"
+                    report.append(msg)
+                    errors.append(msg)
+                else:
+                    report.append(f"  PASS — runtime-config: supervisor.enabled, "
+                                 f"{len(rc['stop_conditions'])} stop conditions")
+            else:
+                report.append("  PASS — runtime-config: supervisor.disabled (single-session)")
+        else:
+            msg = "  runtime-config.yaml not a valid dict"
+            report.append(msg)
+            errors.append(msg)
+
+    # 9b. workitem-source.yaml + adapter 实现
+    ws_file = harness_dir / "planning" / "workitem-source.yaml"
+    if not ws_file.exists():
+        msg = "  MISSING planning/workitem-source.yaml — supervisor cannot dispatch"
+        report.append(msg)
+        errors.append(msg)
+    else:
+        ws = load_yaml(ws_file)
+        if isinstance(ws, dict):
+            adapter = ws.get("adapter")
+            class_name = ws.get("class_name")
+            if not adapter or not class_name:
+                msg = "  workitem-source.yaml missing 'adapter' or 'class_name'"
+                report.append(msg)
+                errors.append(msg)
+            else:
+                # 校验 adapter 实现存在
+                adapter_path = harness_dir / "runtime" / "sources" / f"{adapter}_source.py"
+                if not adapter_path.exists():
+                    msg = (f"  MISSING adapter impl: runtime/sources/{adapter}_source.py — "
+                           f"LLM did not generate workitem source adapter")
+                    report.append(msg)
+                    errors.append(msg)
+                else:
+                    # 校验 adapter 实现了所有抽象方法（importlib 加载）
+                    interface_errs = []
+                    try:
+                        import importlib.util
+                        import types as _types
+                        # 先加载基类
+                        base_spec = importlib.util.spec_from_file_location(
+                            "workitem_source_base",
+                            harness_dir / "runtime" / "workitem_source.py")
+                        base_mod = importlib.util.module_from_spec(base_spec)
+                        base_spec.loader.exec_module(base_mod)
+                        # 加载 adapter
+                        adapter_spec = importlib.util.spec_from_file_location(
+                            f"adapter_{adapter}", adapter_path)
+                        adapter_mod = importlib.util.module_from_spec(adapter_spec)
+                        # 注入基类到 sys.modules（adapter 文件可能 `from runtime.workitem_source import ...`）
+                        import sys as _sys
+                        if "runtime" not in _sys.modules:
+                            _sys.modules["runtime"] = _types.ModuleType("runtime")
+                        _sys.modules["runtime"].workitem_source = base_mod
+                        _sys.modules["runtime.workitem_source"] = base_mod
+                        adapter_spec.loader.exec_module(adapter_mod)
+                        cls = getattr(adapter_mod, class_name, None)
+                        if cls is None:
+                            interface_errs.append(f"class {class_name} not found in {adapter}_source.py")
+                        elif not issubclass(cls, base_mod.WorkitemSource):
+                            interface_errs.append(f"{class_name} does not inherit WorkitemSource")
+                        else:
+                            # 校验抽象方法都被实现
+                            abstract_methods = {
+                                "claim_next", "fetch_brief", "update_status", "archive"
+                            }
+                            for m in abstract_methods:
+                                method = getattr(cls, m, None)
+                                if method is None:
+                                    interface_errs.append(f"{class_name}.{m} missing")
+                                elif getattr(method, "__isabstractmethod__", False):
+                                    interface_errs.append(f"{class_name}.{m} still abstract (not implemented)")
+                    except Exception as e:
+                        interface_errs.append(f"cannot load adapter: {e}")
+                    if interface_errs:
+                        for ie in interface_errs:
+                            msg = f"  ADAPTER INTERFACE ERROR: {ie}"
+                            report.append(msg)
+                            errors.append(msg)
+                    else:
+                        report.append(f"  PASS — workitem-source: adapter={adapter}, "
+                                     f"class={class_name}, all 4 abstract methods implemented")
+        else:
+            msg = "  workitem-source.yaml not a valid dict"
+            report.append(msg)
+            errors.append(msg)
+
+    # 9c. merge-policy.yaml
+    mp_file = harness_dir / "planning" / "merge-policy.yaml"
+    if scope < 3:
+        report.append("  SKIP — scope<3, merge-policy gated out")
+    elif not mp_file.exists():
+        msg = "  MISSING planning/merge-policy.yaml — merge strategy undefined"
+        report.append(msg)
+        errors.append(msg)
+    else:
+        mp = load_yaml(mp_file)
+        if isinstance(mp, dict):
+            policy = mp.get("policy")
+            if criticality >= 4 and policy != "rebase_only":
+                msg = (f"  VIOLATION — criticality={criticality} requires policy=rebase_only, "
+                       f"got policy={policy!r}")
+                report.append(msg)
+                errors.append(msg)
+            elif not policy:
+                msg = "  merge-policy.policy empty"
+                report.append(msg)
+                errors.append(msg)
+            else:
+                report.append(f"  PASS — merge-policy: {policy} (criticality={criticality})")
+        else:
+            msg = "  merge-policy.yaml not a valid dict"
+            report.append(msg)
+            errors.append(msg)
+
+    # 9d. agent-protocol.yaml role 与 prototypes 一致
+    ap_file = harness_dir / "planning" / "agent-protocol.yaml"
+    if scope < 3:
+        report.append("  SKIP — scope<3, agent-protocol gated out")
+    elif not ap_file.exists():
+        msg = "  MISSING planning/agent-protocol.yaml — leaf protocol config undefined"
+        report.append(msg)
+        errors.append(msg)
+    else:
+        ap = load_yaml(ap_file)
+        proto_file = harness_dir / "planning" / "sub-agent-dispatch.yaml"
+        if isinstance(ap, dict) and proto_file.exists():
+            proto_data = load_yaml(proto_file)
+            if isinstance(proto_data, dict):
+                proto_names = set((proto_data.get("prototypes") or {}).keys())
+                ap_roles = set((ap.get("roles") or {}).keys())
+                # agent-protocol 的 roles 应是 prototypes 的子集（不是所有 prototype 都是 leaf role）
+                missing = ap_roles - proto_names
+                if missing:
+                    msg = (f"  agent-protocol.yaml defines roles not in sub-agent-dispatch prototypes: "
+                           f"{sorted(missing)}")
+                    report.append(msg)
+                    warnings.append(msg)
+                else:
+                    report.append(f"  PASS — agent-protocol: {len(ap_roles)} roles, "
+                                 f"all match prototypes")
+    report.append("")
+
+    # 9e. doc contracts 存在 + evolution 字段
+    for doc_slot in ("docs/harness-doc-contract.yaml", "docs/project-doc-contract.yaml"):
+        dc_file = harness_dir / doc_slot
+        if not dc_file.exists():
+            msg = f"  MISSING {doc_slot} — documentation contract required"
+            report.append(msg)
+            errors.append(msg)
+        else:
+            dc = load_yaml(dc_file)
+            if isinstance(dc, dict):
+                evo = dc.get("evolution") or {}
+                if not evo:
+                    msg = f"  {doc_slot} missing 'evolution' field — docs not in evolution loop"
+                    report.append(msg)
+                    errors.append(msg)
+                else:
+                    report.append(f"  PASS — {doc_slot}: evolution field present")
+            else:
+                msg = f"  {doc_slot} not a valid dict"
+                report.append(msg)
+                errors.append(msg)
     report.append("")
 
     # 总结

@@ -62,6 +62,8 @@ LAYER_DIRS = {
     "security": "Cross-Cutting: Security & Isolation",
     "observability": "Cross-Cutting: Observability & Governance",
     "evolution": "Self-Evolution",
+    "runtime": "Runtime: Multi-Worktree Orchestration",
+    "docs": "Runtime: Documentation Contracts",
 }
 
 # 通用原语：domain-agnostic 可执行机器，原样复制，LLM 不改
@@ -76,6 +78,14 @@ UNIVERSAL_PRIMITIVES = {
     "feedback": ["error-capture.py", "mistake-to-constraint.py"],
     "constraints": ["entropy-reduction.py"],
     "evolution": ["framework.md", "innovation-engine.py", "product-analyzer.py"],
+    # Runtime layer: multi-worktree orchestration（v2.6+ 新增）
+    # supervisor 调度多 worktree；worktree_lifecycle 管 worktree 资源；
+    # leaf_protocol/prepare/record 是 leaf helper 的输入输出契约；
+    # event_stream 是真相源；rebase_sync 是合并策略（rebase-only 默认）；
+    # workitem_source 是抽象基类——具体 adapter 由 LLM 在 GENERATE 合成。
+    "runtime": ["supervisor.py", "worktree_lifecycle.py", "leaf_protocol.py",
+                "leaf_prepare.py", "leaf_record.py", "event_stream.py",
+                "rebase_sync.py", "workitem_source.py"],
 }
 
 # 根级通用原语
@@ -138,6 +148,19 @@ LLM_SLOTS = [
      "初始化为空进化日志。"),
     ("evolution", "domain-advancements.yaml",
      "按该项目领域写四阶段进阶模式（Basic/Solid/Advanced/Excellent），供创新引擎使用。"),
+    # Runtime layer slots（v2.6+ 新增）——多 worktree 并发 + 文档产物
+    ("planning", "runtime-config.yaml",
+     "supervisor 运行时配置：max_items / stop_conditions / dispatch_mode / claim_policy / worktree_pool / branch_prefix / base_branch。从 task.complexity (S/C/N/K) + team_size 派生。scope<=2 时 supervisor.enabled=false。"),
+    ("planning", "workitem-source.yaml",
+     "声明 workitem source adapter（adapter + class_name + config）。LLM 据 task.work_source 决定用 yunxiao/github_issues/local_file/jira 等，并在 runtime/sources/<adapter>_source.py 生成实现（继承 runtime/workitem_source.py 的 WorkitemSource 基类，实现 4 个抽象方法）。meta-harness 不预设 adapter。"),
+    ("planning", "merge-policy.yaml",
+     "分支合并策略：rebase_only / rebase_preferred / merge_allowed / squash。从 criticality 派生（C>=4 → rebase_only）。rebase-only 下不需要 merge sub-agent，冲突由 supervisor 标 blocked 转人工。"),
+    ("planning", "agent-protocol.yaml",
+     "leaf agent 协议配置：role 枚举（explorer/worker/tester/reviewer 等）+ 每 role 的 gate / forbidden_side_effects / timeout / effort→budget 映射。从 sub-agent-dispatch.yaml 的 prototypes 派生。被 runtime/leaf_prepare.py 读取。"),
+    ("docs", "harness-doc-contract.yaml",
+     "harness 自身文档契约：README/AGENTS.md/CHANGELOG/DESIGN-DECISIONS 的 schema、生成时机、版本化策略。纳入 evolution loop（genome 含 doc 演进约束，innovation 把'文档过时'作为创新提案）。"),
+    ("docs", "project-doc-contract.yaml",
+     "项目代码文档契约：README/API.md/CHANGELOG/DEPLOYMENT.md/SECURITY.md 的 schema、生成时机、版本化策略。PROVE 阶段验证文档与代码一致（API endpoints 与 routes 对齐等）。纳入 evolution loop。"),
 ]
 
 # ARTIFACT_GATE 保留：按 S/C/N/K 裁剪可选层 slot（核心层 slot 总在）
@@ -154,6 +177,20 @@ ARTIFACT_GATE = {
         "sandbox-config.yaml": "tier!='minimal'",
         "encryption-rules.yaml": "C>=3",
         "audit-log.yaml": "C>=4",
+    },
+    # Runtime layer gate（v2.6+）：
+    #   - runtime-config / merge-policy / agent-protocol: scope>=3 才需要 supervisor（小项目单线程）
+    #   - workitem-source: 总在（即使 scope<3 也用 local_file source）
+    #   - doc contracts: 总在（文档双重产物是硬约束）
+    "planning": {
+        "runtime-config.yaml": "S>=3",
+        "merge-policy.yaml": "S>=3",
+        "agent-protocol.yaml": "S>=3",
+        "workitem-source.yaml": "always",
+    },
+    "docs": {
+        "harness-doc-contract.yaml": "always",
+        "project-doc-contract.yaml": "always",
     },
 }
 
@@ -310,6 +347,47 @@ def scaffold(task: dict, output_dir: Path) -> None:
 
     # 5b. 写 root agent 指令文件（AGENTS.md / CLAUDE.md / .cursorrules）
     #     verify-generation.py 期望这 3 个文件存在；不同 IDE 读不同文件名
+    runtime_enabled = profile["scope"] >= 3
+    runtime_section = ""
+    if runtime_enabled:
+        runtime_section = f"""
+## Multi-Worktree Runtime（v2.6+）
+
+本项目 scope={profile['scope']}（>=3），supervisor 已启用。多 worktree 并发调度：
+
+### 启动 supervisor
+```bash
+# 单 session 模式（不调 supervisor，直接 orchestrator）
+python orchestrator.py --next
+
+# 多 worktree 模式（supervisor 调度多 workitem）
+python runtime/supervisor.py run --project-root .
+
+# 查看状态
+python runtime/supervisor.py status --project-root .
+
+# 优雅停止（写 STOP 文件，下轮停）
+python runtime/supervisor.py stop --project-root .
+```
+
+### workitem source
+workitem source adapter 在 `runtime/sources/<adapter>_source.py`（由 LLM 在 GENERATE 合成）。
+配置在 `planning/workitem-source.yaml`。修改 source 不需重启 supervisor（热更新）。
+
+### 合并策略
+`planning/merge-policy.yaml` 决定合并策略：
+- `rebase_only`（criticality>=4 默认）：workitem 分支 rebase 到 base，冲突标 blocked 转人工
+- `merge_allowed`：需在 sub-agent-dispatch.yaml 加 merge-coordinator prototype
+
+### 事件流（真相源）
+所有 runtime 事件写 `.meta-harness/events/events.jsonl`（append-only + 哈希链）。
+任何状态可从 events 重放重建。
+```bash
+python runtime/event_stream.py tail --project-root . --n 10
+python runtime/event_stream.py verify --project-root .
+```
+"""
+
     root_agents_content = f"""# {task.get('name', 'Project')} — AGENT OPERATING INSTRUCTIONS
 
 你是这个项目的执行 agent。本项目由 meta-harness 生成，harness 配置在当前目录。
@@ -333,7 +411,7 @@ def scaffold(task: dict, output_dir: Path) -> None:
 - 不得绕过 audit_log
 - 每条 acceptance_criteria 必须有可验证证据
 - 配置支持热更新（不重启）
-
+{runtime_section}
 ## 完成判定
 
 `python orchestrator.py --verify` 返回 PASS = 所有 acceptance_criteria 已验证完成。

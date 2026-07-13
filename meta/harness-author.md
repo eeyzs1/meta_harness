@@ -188,6 +188,100 @@ validate-harness.py 的 check #7 会校验所有引用的脚本存在——缺�
 validate-harness.py 的 check #8 校验每条 `handler` 路径存在——缺失报 **ERROR**（阻断 GENERATE→FACTORY）。
 不生成 = apply_fixes 运行时 importlib 会 FileNotFoundError。
 
+### Runtime Layer slot 填充规范（v2.6+ 新增）
+
+meta-harness v2.6+ 引入 runtime layer：生成的 harness 支持 **多 worktree 并发** +
+**文档双重产物**。8 个通用原语（supervisor.py / worktree_lifecycle.py / leaf_protocol.py /
+leaf_prepare.py / leaf_record.py / event_stream.py / rebase_sync.py / workitem_source.py）
+由 scaffold 原样复制；**6 个 LLM slot 由你合成**。
+
+**因地制宜决策矩阵**（task.complexity 驱动）：
+
+| S/C/K | supervisor.enabled | dispatch_mode | merge_policy | worktree_pool | push_after_rebase |
+|-------|-------------------|---------------|-------------|---------------|-------------------|
+| S<=2  | false             | subprocess    | squash      | 0             | false             |
+| S>=3 + team=1 | true       | subprocess    | rebase_only | 0             | false             |
+| S>=3 + team>1 | true       | mavis/ide-adapter | rebase_only | 3-5        | true              |
+| C>=4  | true              | subprocess    | rebase_only | 0             | false             |
+
+**填 slot 步骤**：
+
+1. 读 task.yaml 的 `complexity` (scope/criticality/novelty/coupling) + `team_size`
+2. 按决策矩阵定 supervisor 形态
+3. 逐个 slot 改写：
+   - `planning/runtime-config.yaml`：填 max_items / stop_conditions / dispatch_mode 等
+   - `planning/workitem-source.yaml`：选 adapter + 生成 runtime/sources/<adapter>_source.py
+   - `planning/merge-policy.yaml`：填 policy + dual_approval（C>=4 启用）
+   - `planning/agent-protocol.yaml`：从 sub-agent-dispatch.yaml 的 prototypes 派生 role 配置
+   - `docs/harness-doc-contract.yaml`：填文档 schema + 演进约束
+   - `docs/project-doc-contract.yaml`：填项目文档 schema + PROVE 验证规则
+
+**关键：workitem source adapter 必须由你合成**
+
+scaffold 复制的是 `runtime/workitem_source.py` 的 **抽象基类**——它定义了 4 个抽象方法
+但不含具体实现。你必须在 `runtime/sources/<adapter>_source.py` 生成具体实现：
+
+```python
+# runtime/sources/<adapter>_source.py 示例（local_file）
+from runtime.workitem_source import WorkitemSource
+
+class LocalFileSource(WorkitemSource):
+    def __init__(self, config: dict):
+        self.config = config
+        self.source_dir = Path(config["config"]["source_dir"])
+        # ...
+
+    def claim_next(self, policy: str = "any") -> Optional[str]:
+        # 扫 source_dir/pending/*.yaml，按 policy 选一个，移到 in_progress/
+        ...
+
+    def fetch_brief(self, workitem_id: str) -> dict:
+        # 读 yaml 返回 title/description/acceptance_criteria/effort/priority
+        ...
+
+    def update_status(self, workitem_id: str, status: str) -> None:
+        # 移文件到对应目录（pending/in_progress/done/blocked）
+        ...
+
+    def archive(self, workitem_id: str, result: str, summary: str) -> None:
+        # 移到 done/，写 events 流
+        ...
+```
+
+可选 adapter（据 `task.work_source` 选）：
+- `local_file`：本地 file watcher（最简，不依赖外部系统；scope<=2 或开发期默认）
+- `yunxiao`：云效 API（中国团队常用）
+- `github_issues`：GitHub Issues（开源项目）
+- `jira`：Jira REST API（企业项目）
+- `azure_boards`：Azure DevOps
+- `manual`：人工指定（无 source 系统，每次手动跑）
+
+**不要预设 adapter**——meta-harness 不预设任何平台。你据 task 实际选。
+
+**为什么 workitem source 是抽象基类而非具体实现**：
+1. work source 高度项目特定——某团队用云效，某团队用 GitHub，某团队本地文件
+2. 接口契约稳定（claim/fetch/update/archive），实现可换
+3. 与 fixer-registry 模式一致：通用接口 + 项目特定实现
+
+**文档双重产物（硬约束）**
+
+文档不是"事后补充"——是流水线产物，纳入 evolution loop：
+- `docs/harness-doc-contract.yaml` 管 harness 自身文档（README/AGENTS.md/CHANGELOG/DESIGN-DECISIONS）
+- `docs/project-doc-contract.yaml` 管项目代码文档（README/API.md/CHANGELOG/DEPLOYMENT.md/SECURITY.md）
+- PROVE 阶段验证文档与代码一致（如 API.md endpoints == 代码 routes）
+- innovation-engine 把"文档过时"（>max_age_days）作为创新提案类别
+
+**为什么 rebase-only 不需要 merge sub-agent**：
+
+merge 冲突是设计缺陷的 symptom。rebase-only 策略下：
+- workitem 分支只 rebase 到 base，从不 merge base 到 feature
+- rebase 冲突 → supervisor 标 workitem 为 blocked → 人工 triage
+- 这比"自动 merge"更安全：让冲突显式化，而非自动解决（自动解决可能丢语义）
+
+`merge-policy.yaml` 的 `policy: rebase_only` 时，不需要在 sub-agent-dispatch.yaml 加
+merge-coordinator prototype。只有 `merge_allowed` 才需要——而 C>=4 项目强制 rebase_only，
+所以 merge sub-agent **可选**，不是必须。
+
 ## 硬约束（不可违反）
 
 1. **NO mock/fake/stub/simulated** —— 不能在 slot 内容里写 mock 实现
@@ -196,6 +290,8 @@ validate-harness.py 的 check #8 校验每条 `handler` 路径存在——缺失
 4. **acceptance_criteria traceability** —— 每条验收标准必须在某 slot 里有对应验证手段
 5. **不删通用原语** —— scaffold 复制的 anti-mock/self-check/evolution 等不动
 6. **domain 由 task 决定** —— 不从 5 个固定桶选；按 task 实际领域合成
+7. **workitem source adapter 必须合成** —— 不预设 adapter；据 task.work_source 在 runtime/sources/ 生成实现
+8. **文档双重产物** —— harness-doc + project-doc 两个 contract 都要填，纳入 evolution loop
 
 ## 完成后
 
