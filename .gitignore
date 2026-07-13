@@ -14,6 +14,8 @@ build/
 .DS_Store
 Thumbs.db
 .meta-harness/
+# E2E 测试运行时生成的临时项目目录（v2.8.0 runtime layer 验证）
+.e2e-runtime-test/
 meta/pipeline-state.yaml
 memory/generation-log.yaml
 # task.yaml 是 INTERPRET 阶段的运行时输出（会随用户任务变化）。

@@ -55,29 +55,48 @@ def _git(*args: str, cwd: Path, capture: bool = True) -> tuple:
     return result.returncode, result.stdout.strip(), result.stderr.strip()
 
 
+def _has_remote(remote: str, cwd: Path) -> bool:
+    """检查指定 remote 是否存在。"""
+    rc, out, _ = _git("remote", cwd=cwd)
+    if rc != 0 or not out:
+        return False
+    return remote in out.split()
+
+
 def sync(branch: str, base: str, worktree_path: Path,
          push: bool = False) -> dict:
     """rebase feature 分支到 base。
 
     Args:
       branch: feature 分支名（如 feature/cctt-123）
-      base: base 分支（如 origin/main）
+      base: base 分支（如 origin/main 或 main）
       worktree_path: 该 branch 的 worktree 路径
       push: True=rebase 后 push --force-with-lease
+
+    无 remote 时的 fallback（本地仓库 / 离线场景）：
+      - base 形如 "origin/main" 但仓库无 origin → 退化到本地 "main"
+      - base 形如 "main"（无 origin/ 前缀）→ 跳过 fetch，直接用本地 ref
 
     Returns:
       {"ok": bool, "conflicts": [...], "base_sha": ..., "branch_sha": ...}
     """
-    # 1. fetch base（在 worktree 里执行）
-    rc, out, err = _git("fetch", "origin", base.split("/")[-1] if "/" in base else base,
-                         cwd=worktree_path)
-    if rc != 0:
-        return {"ok": False, "error": f"fetch failed: {err}", "conflicts": []}
+    # 1. fetch base（仅当 base 是远程引用且 remote 存在时；否则退化到本地 base）
+    if "/" in base and base.split("/")[0] == "origin":
+        if _has_remote("origin", worktree_path):
+            rc, out, err = _git("fetch", "origin", base.split("/", 1)[1],
+                                 cwd=worktree_path)
+            if rc != 0:
+                return {"ok": False, "error": f"fetch failed: {err}", "conflicts": []}
+        else:
+            # 无 remote → 退化到本地 base（strip origin/ 前缀）
+            base = base.split("/", 1)[1]
+    # 本地 base：跳过 fetch，直接 rebase 本地 ref
 
     # 2. 记录 rebase 前 base sha
-    rc, base_sha, _ = _git("rev-parse", base, cwd=worktree_path)
+    rc, base_sha, err = _git("rev-parse", base, cwd=worktree_path)
     if rc != 0:
-        return {"ok": False, "error": f"rev-parse base failed: {base_sha}", "conflicts": []}
+        return {"ok": False, "error": f"rev-parse base '{base}' failed: {err}",
+                "conflicts": []}
 
     # 3. rebase
     rc, out, err = _git("rebase", base, cwd=worktree_path)
@@ -88,15 +107,23 @@ def sync(branch: str, base: str, worktree_path: Path,
                      if line.startswith(("UU", "AA", "DD", "AU", "UA", "DU", "UD"))]
         # abort rebase 让 worktree 回到 rebase 前状态
         _git("rebase", "--abort", cwd=worktree_path)
+        if conflicts:
+            return {
+                "ok": False,
+                "error": "rebase conflicts",
+                "conflicts": conflicts,
+                "base_sha": base_sha,
+            }
+        # 非冲突失败（如 unstaged changes / invalid upstream）——返回真实 git 错误
         return {
             "ok": False,
-            "error": f"rebase conflicts",
-            "conflicts": conflicts,
+            "error": f"rebase failed (non-conflict): {err}",
+            "conflicts": [],
             "base_sha": base_sha,
         }
 
-    # 4. push（rebase 改写历史，需 force-with-lease）
-    if push:
+    # 4. push（rebase 改写历史，需 force-with-lease；无 remote 时跳过）
+    if push and _has_remote("origin", worktree_path):
         rc, out, err = _git("push", "--force-with-lease", "origin", branch,
                             cwd=worktree_path)
         if rc != 0:

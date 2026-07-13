@@ -327,6 +327,87 @@ def run_innovate() -> dict:
         return {"status": "no_innovation_engine"}
 
 
+def run_workitem(workitem_id: str) -> dict:
+    """处理单个 workitem（被 supervisor 派发，在 worktree 内执行）。
+
+    本函数在独立 worktree 里被 `python orchestrator.py --workitem-id <id>` 调用。
+    它：
+      1. 从 workitem source 读 workitem brief（找到对应的 work unit）
+      2. 准备 task.json（leaf_prepare 合成）
+      3. 等 leaf helper（AI agent / IDE adapter）完成，读 result.json
+      4. 通过 leaf_record 把 result 写入 events 流
+      5. exit 0=成功，非零=失败
+
+    在没有真实 leaf helper（AI agent）的场景下：
+      - 若 worktree 里有 result.json（leaf helper 已写），直接 record + 返回
+      - 若没有 result.json，标记 deferred（等待 leaf helper 处理）
+    """
+    print(f"\n{'='*60}")
+    print(f"WORKITEM DISPATCH: {workitem_id}")
+    print(f"{'='*60}")
+
+    # 1. 加载 workitem source 配置
+    ws_file = PROJECT_ROOT / "planning" / "workitem-source.yaml"
+    if not ws_file.exists():
+        print(f"ERROR: planning/workitem-source.yaml not found")
+        return {"status": "error", "reason": "no workitem-source config"}
+
+    with open(ws_file, "r", encoding="utf-8") as f:
+        ws_cfg = yaml.safe_load(f) or {}
+
+    # 2. 用 load_source 加载 adapter（动态 import）
+    import importlib
+    adapter_name = ws_cfg.get("adapter")
+    class_name = ws_cfg.get("class_name")
+    if not adapter_name or not class_name:
+        print(f"ERROR: workitem-source.yaml missing adapter/class_name")
+        return {"status": "error", "reason": "invalid source config"}
+
+    module_path = f"runtime.sources.{adapter_name}_source"
+    try:
+        mod = importlib.import_module(module_path)
+        cls = getattr(mod, class_name)
+        source = cls(ws_cfg)
+    except Exception as e:
+        print(f"ERROR: cannot load adapter {adapter_name}: {e}")
+        return {"status": "error", "reason": f"adapter load failed: {e}"}
+
+    # 3. fetch brief
+    brief = source.fetch_brief(workitem_id)
+    print(f"Workitem: {brief.get('title', workitem_id)}")
+    print(f"Acceptance criteria: {brief.get('acceptance_criteria', [])}")
+
+    # 4. 检查 result.json 是否已存在（leaf helper 可能已写）
+    result_file = PROJECT_ROOT / f"result-{workitem_id}.json"
+    if not result_file.exists():
+        result_file = PROJECT_ROOT / "result.json"
+
+    if result_file.exists():
+        # leaf helper 已完成，record 到 events
+        print(f"\n--- Recording leaf result ---")
+        leaf_record = PROJECT_ROOT / "runtime" / "leaf_record.py"
+        if leaf_record.exists():
+            proc = run_script(leaf_record, [
+                "--project-root", str(PROJECT_ROOT),
+                "--result", str(result_file),
+                "--workitem-id", workitem_id,
+                "--work-unit-id", brief.get("work_unit_id", "WU001"),
+                "--prototype", brief.get("prototype", "executor"),
+                "--gate", brief.get("gate", "implement"),
+            ])
+            print(proc.stdout)
+            if proc.returncode != 0:
+                print(f"leaf_record failed: {proc.stderr}")
+        print(f"\n✅ Workitem {workitem_id} completed (result recorded)")
+        return {"status": "completed", "workitem_id": workitem_id}
+    else:
+        # 没有 result.json → deferred（等待 leaf helper 处理）
+        print(f"\n⏳ No result.json found — workitem deferred")
+        print(f"   Leaf helper (AI agent) should process task.json and write result.json")
+        print(f"   Supervisor will detect non-zero exit and mark as needs_attention")
+        return {"status": "deferred", "workitem_id": workitem_id}
+
+
 def main():
     parser = argparse.ArgumentParser(description="Active Orchestrator — Enforced Execution Engine")
     parser.add_argument("--status", action="store_true", help="Show project status")
@@ -335,7 +416,15 @@ def main():
     parser.add_argument("--mark-complete", default=None, help="Mark criterion complete (after verification)")
     parser.add_argument("--evolve", action="store_true", help="Run evolution cycle")
     parser.add_argument("--innovate", action="store_true", help="Run innovation cycle")
+    parser.add_argument("--workitem-id", default=None,
+                        help="Process a single workitem (dispatched by supervisor in a worktree)")
     args = parser.parse_args()
+
+    if args.workitem_id:
+        result = run_workitem(args.workitem_id)
+        # exit 0 = completed, 1 = deferred/error (supervisor 据此判断 verdict)
+        sys.exit(0 if result["status"] == "completed" else 1)
+        return
 
     if args.status:
         show_status()

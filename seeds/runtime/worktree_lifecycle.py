@@ -115,6 +115,40 @@ class WorktreeLifecycle:
         safe_id = "".join(c if c.isalnum() or c in "-_" else "-" for c in workitem_id)
         return f"{branch_prefix}/{safe_id}"
 
+    def _ensure_git_repo(self) -> None:
+        """确保 project_root 是 git 仓库（含至少一个 commit，否则 worktree add 失败）。
+
+        首次 acquire 时自动初始化——让 generated harness 即开即用，不要求用户先 git init。
+        已是 git 仓库且有 commit 时为 no-op。
+        """
+        has_head = False
+        if (self.project_root / ".git").exists():
+            try:
+                self._git("rev-parse", "HEAD")
+                has_head = True
+            except RuntimeError:
+                pass  # 仓库存在但无 commit
+        if not has_head:
+            try:
+                self._git("-c", "init.defaultBranch=main", "init")
+            except RuntimeError as e:
+                raise RuntimeError(
+                    f"project_root is not a git repo and git init failed: {e}")
+            # baseline commit（worktree add 需要 HEAD 存在）
+            keep = self.project_root / ".gitkeep"
+            if not keep.exists():
+                keep.write_text(
+                    "initialized by worktree_lifecycle (runtime primitive)\n",
+                    encoding="utf-8")
+            try:
+                self._git("add", ".gitkeep")
+                self._git("-c", "user.email=runtime@meta-harness",
+                          "-c", "user.name=runtime",
+                          "commit", "-m",
+                          "initial baseline (auto-created by worktree_lifecycle)")
+            except RuntimeError:
+                pass  # 可能已有 commit 或 nothing to commit
+
     # ---- 核心 API ----
 
     def acquire(self, workitem_id: str, branch_prefix: str = "feature",
@@ -128,6 +162,7 @@ class WorktreeLifecycle:
         Returns:
           worktree 路径（Path）
         """
+        self._ensure_git_repo()
         alloc = self._read_alloc()
         if workitem_id in alloc["allocations"]:
             if not reuse:
