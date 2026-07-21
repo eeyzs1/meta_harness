@@ -25,3 +25,28 @@ task.yaml
 # IDE / tooling working dirs
 .trae/
 .vscode/
+.idea/
+.cursor/
+.continue/
+.aider*
+.claude/
+.gemini/
+.qwen/
+.cody/
+.codeium/
+.tabnine/
+.windsurf/
+.zed/
+.idx/
+.bolt/
+.greptile/
+.copilot/
+# AI IDE 专用 ignore 文件（类似 .gitignore 的本地补充）
+.cursorignore
+.cursorindexingignore
+.codeiumignore
+.aiderignore
+.claudeignore
+# Jupyter / 数据科学常见工作目录
+.ipynb_checkpoints/
+.jupyter/
