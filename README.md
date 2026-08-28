@@ -115,6 +115,26 @@ python orchestrator.py --innovate
 python scripts/quality-score.py
 ```
 
+**管道控制（v3.0，事件日志驱动）：**
+```bash
+# 初始化 / 解释意图（锁定验收标准）
+python meta/meta-orchestrator.py --status
+python meta/meta-orchestrator.py --interpret-intent "<原始意图>"
+
+# 推进阶段（GENERATE→FACTORY 有 validate-harness 门禁，由 hooks 强制执行）
+python meta/meta-orchestrator.py --advance [--no-auto-run]
+
+# 阻塞/解除（解除必须记录 code + reason）；暂停/恢复
+python meta/meta-orchestrator.py --fail "<错误>"
+python meta/meta-orchestrator.py --unblock --code <code> --reason <reason>
+python meta/meta-orchestrator.py --pause | --resume
+
+# 审计与完整性
+python meta/meta-orchestrator.py --events           # 追加式事件日志（真相源）
+python meta/meta-orchestrator.py --check-invariants # fail-closed 不变量检查
+python meta/meta-orchestrator.py --compact          # 以锁标记重新生成 resume brief
+```
+
 ---
 
 ## 项目结构
@@ -280,6 +300,36 @@ Harness 是围绕 AI 代理构建的**约束+工具+验证**系统。就像赛�
 - 高工作量或安全相关的创新需要人工确认（🔒 NEEDS APPROVAL）
 - 低工作量且非安全的创新可自动执行（🟢 AUTO-APPROVED）
 - 创新提案保存在 `evolution/innovation-log.yaml`，全程可追溯
+
+---
+
+## v3.0：借鉴 DeepSeek Harness 的核心理念
+
+v3.0 把 DeepSeek Harness（DSH）中可迁移的核心理念落地到本框架（不引入
+Node/Cordis 运行时，全部以 Python + YAML + Markdown 实现）：
+
+| DSH 理念 | 本框架落地 |
+|---|---|
+| 会话日志即真相（model-visible ⟺ logged） | `meta/event-log.yaml` 追加式事件日志是唯一真相源；`pipeline-state.yaml` 与 `PHASE_BRIEF.md` 都是派生投影，带 `asOfSeq` 水位 |
+| fail-closed 设计 | `scripts/log_invariant.py`：未知日志版本/事件类型/seq 断裂/过期 brief/孤儿压缩 → 显式 FAIL |
+| 并发写保护（CAS） | 每次变更带 `expected_revision`，陈旧写者被拒而非静默覆盖 |
+| 目标语义（goal） | 持久 `phase` 与 `auto_advance` 分离；`blocked_code`/`blocked_reason`；同 code 连续拒绝 3 次才阻塞；`rounds/max_rounds` 约束自动继续；`--pause/--resume` |
+| 事件分发模式（bail/emit） | `hooks/pre-advance/*.py` 是 bail 门禁（可拒绝推进，GENERATE 门禁即其一）；`hooks/phase-complete|phase-enter` 是 emit 观察者（失败被包含） |
+| 能力接缝（Definition/Provider/Consumer） | 生成的 harness 带 `seams/`（workitem-source/executor/ci/sandbox），validate-harness 校验三角色齐全，残缺接缝报错 |
+| 声明式组合 + 补丁（profile/patch） | 生成项目带 `harness-composition.yaml`（命名行）+ `harness-patch.yaml`（按 id 覆盖，未知 id 拒绝）；`scripts/compose.py` |
+| 技能注册表 + 目录 | 生成项目带 `skills/catalog.yaml`；`context/loader.py skill list|load`，坏技能带原因列出 |
+| 压缩（compaction） | `--compact` 以 `compaction/start/summary/end` 锁标记重生成 brief，崩溃（孤儿 start）可检测 |
+| 溢出（spill） | 超大产物落 `meta/artifacts/`，状态只存 locator；失败 best-effort 非致命 |
+| postmortem 文化 | `memory/postmortems/NNNN-<slug>.md`（什么坏了/根因/为何逃过门禁/持久教训），由 mistake-to-constraint 生成且幂等 |
+| 权限单调收紧 + 审批 | `tools/permissions.yaml` 显式模式（read-only/workspace-write/full）+ 预设；`guard.py --permission` 拒绝即最终；`enforce-permission.py` 把"沙箱拒绝"(126) 与"任务失败"分开 |
+| 可回滚自我修改 + 审批分级 | `scripts/evolve.py`：变异带 evidence_refs；变异前自动快照、`--rollback` 字节级还原；NEEDS_APPROVAL 变异默认不落地；genome 按代版本化 |
+
+**三条机械不变量**（有脚本断言，非提示词要求）：
+1. **模型可见 ⟺ 已记录**：`--check-invariants` 校验 brief/state 的水位与日志一致。
+2. **fail-closed**：未知形状显式 FAIL，绝不静默猜测。
+3. **门禁带回归测试**：`tests/test_state_fold.py`、`test_orchestrator.py`、
+   `test_compose.py`、`test_events.py`、`test_integration.py` 每个门禁都有
+   "删掉门禁必红"的回归测试。
 
 ---
 

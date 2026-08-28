@@ -171,6 +171,11 @@ class TestGeneration:
             "domain": "api_service",
             "goal": "Test layers",
             "acceptance_criteria": ["test"],
+            # ARTIFACT_GATE (v2.5+) gates human-interface (C>=4), audit-log
+            # (C>=4), session-replay (tier==full): use a full-profile task so
+            # every declared artifact is copied.
+            "complexity": {"scope": 3, "criticality": 4, "novelty": 4,
+                           "coupling": 4, "tier": "full"},
         }
         generate(task, "api-service", temp_output)
 
