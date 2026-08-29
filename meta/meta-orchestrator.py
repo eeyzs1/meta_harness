@@ -134,7 +134,10 @@ PHASE: INTERPRET -- Intent -> Structured Task
    - Domain classification
 5. Confirm with user before proceeding (this is the only mandatory human gate)
 6. Lock criteria: python meta/meta-orchestrator.py --save-acceptance-criteria "<criteria>"
-7. When confirmed, run: python meta/meta-orchestrator.py --advance
+7. DEEPEN (enforced by hooks/pre-advance/20-deepen-gate.py): write
+   memory/deepen-corrections.yaml per meta/prompt-contracts/deepen/, then:
+   python scripts/interpret.py --deepen memory/deepen-corrections.yaml --task task.yaml
+8. When confirmed and deepened, run: python meta/meta-orchestrator.py --advance
 """,
     "GENERATE": """
 PHASE: GENERATE -- Task -> Executable Harness Project (v2 LLM-driven flow)

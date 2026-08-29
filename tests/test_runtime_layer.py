@@ -190,3 +190,64 @@ def test_supervisor_status_and_dispatch_bookkeeping(runtime_project):
     assert wid == "WU001"
     sup.source.update_status(wid, "claimed")
     assert sup.events.verify_chain()["ok"]
+
+
+# ---------------------------------------------------------------- git ops (P2#12 A)
+
+pytestmark = pytest.mark.skipif(
+    shutil.which("git") is None, reason="git is required for worktree/rebase tests")
+
+
+def _git(cwd, *args):
+    proc = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
+                          text=True, encoding="utf-8", errors="replace")
+    return proc.returncode, (proc.stdout + proc.stderr).strip()
+
+
+@pytest.fixture
+def git_project(tmp_path):
+    """A real git repository with a main branch and an initial commit."""
+    root = tmp_path / "gitproj"
+    root.mkdir()
+    _git(root, "init", "-b", "main")
+    _git(root, "config", "user.email", "t@t")
+    _git(root, "config", "user.name", "t")
+    (root / "base.txt").write_text("base\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "initial")
+    # a subsequent change on main (the feature branch will be behind it)
+    (root / "base.txt").write_text("base\nmain-change\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "main-advance")
+    return root
+
+
+def test_worktree_acquire_release_and_rebase(git_project):
+    sys.path.insert(0, str(git_project))
+    sys.path.insert(0, str(git_project / "runtime"))
+    from runtime.worktree_lifecycle import WorktreeLifecycle
+    from runtime.rebase_sync import sync as rebase_sync
+
+    wt = WorktreeLifecycle(git_project)
+    alloc = wt.acquire("WU001", branch_prefix="feature")
+    wt_path = wt.path_of("WU001")
+    assert wt_path is not None and wt_path.exists()
+    assert (git_project / ".git" / "worktrees").exists()  # real git worktree
+
+    # commit work on the feature branch inside the worktree
+    rc, out = _git(wt_path, "status")
+    assert rc == 0
+    (wt_path / "feature.txt").write_text("work\n", encoding="utf-8")
+    _git(wt_path, "add", ".")
+    _git(wt_path, "commit", "-m", "feature-work")
+
+    # rebase the feature branch onto main (which has advanced)
+    result = rebase_sync(branch="feature/WU001", base="main", worktree_path=wt_path,
+                         push=False)
+    assert result["ok"], result
+    rc, log = _git(wt_path, "log", "--oneline", "-3")
+    assert "main-advance" in log  # the main change is now under the feature work
+
+    # release prunes the worktree
+    wt.release("WU001", prune=True)
+    assert not wt_path.exists()

@@ -31,8 +31,9 @@ completed_phases, phase_history, verified_criteria, errors, rounds,
 consecutive_blocked, updated_at. Everything else is event-backed.
 
 Usage:
-    python scripts/state-fold.py --log <path> --fold          # print projection
-    python scripts/state-fold.py --log <path> --dump          # print events
+    python scripts/state_fold.py --log <path> --fold          # print projection
+    python scripts/state_fold.py --log <path> --dump          # print events
+    python scripts/state_fold.py --log <path> --compact 200   # checkpoint-compact
 """
 
 import argparse

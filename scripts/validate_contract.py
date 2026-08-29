@@ -78,6 +78,10 @@ def validate_value(value, schema: dict, path: str, errors: list) -> None:
         items = schema.get("items")
         for i, item in enumerate(value):
             validate_value(item, items, f"{path}[{i}]", errors)
+        if "minItems" in schema and len(value) < schema["minItems"]:
+            errors.append(f"{path}: expected >= {schema['minItems']} items, got {len(value)}")
+        if "maxItems" in schema and len(value) > schema["maxItems"]:
+            errors.append(f"{path}: expected <= {schema['maxItems']} items, got {len(value)}")
     if "enum" in schema and isinstance(value, (str, int, float, bool)):
         if value not in schema["enum"]:
             errors.append(f"{path}: {value!r} not in enum {schema['enum']}")

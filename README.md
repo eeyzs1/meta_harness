@@ -115,7 +115,7 @@ python orchestrator.py --innovate
 python scripts/quality-score.py
 ```
 
-**管道控制（v3.0，事件日志驱动）：**
+**管道控制（v3.1，事件日志驱动）：**
 ```bash
 # 初始化 / 解释意图（锁定验收标准）
 python meta/meta-orchestrator.py --status

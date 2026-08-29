@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install deps
+        run: pip install --quiet pyyaml pytest
+      - name: Syntax gate (all python compiles)
+        run: |
+          set -e
+          find . -name "*.py" -not -path "./.git/*" -not -path "*/__pycache__/*" \
+            -exec python -m py_compile {} +
+      - name: Test suite
+        run: python -m pytest tests/ -q

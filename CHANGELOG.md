@@ -86,6 +86,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to
   `--check-invariants` and the generated projects' logs are now tamper-evident
   (legacy unchained logs are skipped, not failed).
 
+### Fixed (fourth pass, 2026-08-29: close the loop)
+
+- **B DEEPEN gate**: new `hooks/pre-advance/20-deepen-gate.py` — advancing from
+  INTERPRET requires a schema-valid `memory/deepen-corrections.yaml` (the DEEPEN
+  contract). "First principles" interpretation is now mechanically enforced, not
+  voluntary. Deepen schema tightened: `domain` is an enum of the five known
+  domains, `acceptance_criteria` has `minItems: 1`; `validate_contract` gained
+  `minItems`/`maxItems` support.
+- **A runtime git ops verified**: `test_runtime_layer.py` now covers a real git
+  worktree acquire → commit → rebase onto an advanced main → release with prune,
+  plus `rebase_sync` local fallback. The last "unverified" path is closed.
+- **C CI**: `.github/workflows/ci.yml` runs pytest + a py_compile gate on
+  Python 3.10/3.11/3.12 for every push/PR.
+- **D docs**: AGENTS.md title + README pipeline section bumped to v3.1;
+  `state_fold.py` usage fixed.
+- **ADR-007/ADR-008** in `memory/decisions.md`: the script/prompt split is
+  recorded as architecture; the four design boundaries (hash-chain trust model,
+  `file:` existence semantics, checkpoint ref invalidation, heuristic scanners)
+  are explicitly CLOSED as boundaries, not TODO items.
+
 ### Changed
 - `seeds/orchestrator.py` `--verify` records `verify/run` evidence per check and
   runs declared tests (`_run_declared_tests`); `show_status` persists the
