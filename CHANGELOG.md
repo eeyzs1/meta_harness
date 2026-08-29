@@ -4,7 +4,7 @@ All notable changes to Meta-Harness are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [3.1.0] — 2026-08-28
+## [3.1.0] — 2026-08-29
 
 ### Added — "verify the world, not the self-report" (script vs prompt hybrid)
 
